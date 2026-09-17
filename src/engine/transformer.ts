@@ -303,7 +303,35 @@ export class MicroGPT {
     };
   }
 
+  // Evaluate loss on a batch without gradient updates (used for validation loss)
+  evaluateLoss(batchTokens: { input: number[]; target: number[] }[]): number {
+    const { vocabSize } = this.config;
+    let totalLoss = 0;
+    let totalTokens = 0;
+
+    for (const item of batchTokens) {
+      const tokens = item.input;
+      const targets = item.target;
+      const T = tokens.length;
+      if (T === 0) continue;
+
+      const { logits } = this.forward(tokens, false);
+
+      for (let t = 0; t < T; t++) {
+        const targetTok = Math.min(Math.max(0, targets[t]), vocabSize - 1);
+        const probs = softmaxInPlace(logits[t]);
+        const p = Math.max(1e-12, probs[targetTok]);
+        totalLoss += -Math.log(p);
+        totalTokens++;
+      }
+    }
+
+    return totalTokens > 0 ? totalLoss / totalTokens : 0;
+  }
+
   // Single step training on a batch of token slices
+  // Note: Browser trainStep optimizes embeddings, MLP (w1, b1, w2, b2), and lm_head.
+  // Full analytic backprop through causal self-attention is performed in PyTorch (python/train_tiny_gpt.py).
   trainStep(
     batchTokens: { input: number[]; target: number[] }[],
     lr: number = this.config.lr
@@ -320,10 +348,6 @@ export class MicroGPT {
     const dB1 = new Float32Array(this.b1.length);
     const dW2 = new Float32Array(this.w2.length);
     const dB2 = new Float32Array(this.b2.length);
-    const dWq = new Float32Array(this.wq.length);
-    const dWk = new Float32Array(this.wk.length);
-    const dWv = new Float32Array(this.wv.length);
-    const dWo = new Float32Array(this.wo.length);
 
     for (const item of batchTokens) {
       const tokens = item.input;
@@ -365,35 +389,41 @@ export class MicroGPT {
         // Backprop through MLP
         const mlpHidden = 4 * nEmbd;
         const dXMid = new Float32Array(dXFinal); // residual connection
-        const dHVec = new Float32Array(mlpHidden);
 
-        for (let j = 0; j < mlpHidden; j++) {
-          let s = 0;
-          for (let d = 0; d < nEmbd; d++) {
-            const idx = j * nEmbd + d;
-            dW2[idx] += activations.xFinal[t][d] * dXFinal[d];
-            s += this.w2[idx] * dXFinal[d];
-          }
-          dB2[t % nEmbd] += dXFinal[t % nEmbd] * 0.1;
-          dHVec[j] = s;
+        // Accumulate bias gradient for b2
+        for (let d = 0; d < nEmbd; d++) {
+          dB2[d] += dXFinal[d];
         }
 
-        // Embedding updates (Token & Positional)
+        for (let j = 0; j < mlpHidden; j++) {
+          // Recompute activation for hidden unit j
+          let actH = this.b1[j];
+          for (let k = 0; k < nEmbd; k++) {
+            actH += activations.xMid[t][k] * this.w1[k * mlpHidden + j];
+          }
+
+          if (actH > 0) { // ReLU derivative
+            let s = 0;
+            for (let d = 0; d < nEmbd; d++) {
+              const idx = j * nEmbd + d;
+              dW2[idx] += actH * dXFinal[d];
+              s += this.w2[idx] * dXFinal[d];
+            }
+            dB1[j] += s;
+            for (let k = 0; k < nEmbd; k++) {
+              dW1[k * mlpHidden + j] += activations.xMid[t][k] * s;
+              dXMid[k] += this.w1[k * mlpHidden + j] * s;
+            }
+          }
+        }
+
+        // Embedding updates (Token & Positional) through residual
         const tok = tokens[t];
         const tokOffset = tok * nEmbd;
         const posOffset = t * nEmbd;
         for (let d = 0; d < nEmbd; d++) {
-          const g = dXMid[d] * 0.5;
-          dWte[tokOffset + d] += g;
-          dWpe[posOffset + d] += g;
-        }
-
-        // Attention weights gradients
-        for (let i = 0; i < Math.min(nEmbd, 16); i++) {
-          dWq[i] += dXMid[i % nEmbd] * 0.1;
-          dWk[i] += dXMid[(i + 1) % nEmbd] * 0.1;
-          dWv[i] += dXMid[(i + 2) % nEmbd] * 0.1;
-          dWo[i] += dXMid[i] * 0.1;
+          dWte[tokOffset + d] += dXMid[d];
+          dWpe[posOffset + d] += dXMid[d];
         }
       }
     }
@@ -433,10 +463,6 @@ export class MicroGPT {
     applyAdam('b1', this.b1, dB1);
     applyAdam('w2', this.w2, dW2);
     applyAdam('b2', this.b2, dB2);
-    applyAdam('wq', this.wq, dWq);
-    applyAdam('wk', this.wk, dWk);
-    applyAdam('wv', this.wv, dWv);
-    applyAdam('wo', this.wo, dWo);
 
     return {
       loss: avgLoss,

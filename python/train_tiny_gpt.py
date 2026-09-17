@@ -1,12 +1,7 @@
-import { ModelConfig } from '../types';
-
-export function generatePyTorchScript(config: ModelConfig, sampleDataName: string = 'input.txt'): string {
-  return `"""
+"""
 train_tiny_gpt.py
 =================
 TinyGPT Pretraining Lab: Standalone 1-File PyTorch Pretraining Script
-File location: python/train_tiny_gpt.py
-
 Pretrains a minimal 1-block causal language model (Decoder-Only Transformer) on any text,
 evaluates train/val loss, saves checkpoint weights, generates autoregressive text,
 and exports browser-compatible JSON weights for the TinyGPT visualizer.
@@ -16,7 +11,7 @@ Prerequisites:
 
 Usage:
     python python/train_tiny_gpt.py
-    # or inside python/ directory:
+    # or from the python/ directory:
     cd python && python train_tiny_gpt.py
 """
 
@@ -29,14 +24,14 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 # -----------------------------------------------------------------------------
-# Hyperparameters (Matching TinyGPT Pretraining Lab config)
+# Hyperparameters (Matching TinyGPT Pretraining Lab default config)
 # -----------------------------------------------------------------------------
-batch_size = ${config.batchSize}          # Sequences processed in parallel per step
-block_size = ${config.blockSize}         # Maximum context length (tokens)
-n_embd = ${config.nEmbd}             # Embedding dimension
-n_head = ${config.nHead}              # Number of attention heads
-n_layer = 1             # 1 Transformer block (MicroGPT architecture)
-learning_rate = ${config.lr}   # Learning rate for AdamW
+batch_size = 4          # Sequences processed in parallel per step
+block_size = 32         # Maximum context length (tokens)
+n_embd = 32             # Embedding dimension
+n_head = 2              # Number of attention heads (head_dim = 16)
+n_layer = 1             # 1 Transformer block
+learning_rate = 0.003   # Learning rate for AdamW
 max_iters = 1000        # Total optimization steps
 eval_interval = 100     # Evaluation frequency
 eval_iters = 40         # Batches to average for train/val loss
@@ -48,9 +43,9 @@ print(f"--> [TinyGPT] Compute device: {device.upper()}")
 # -----------------------------------------------------------------------------
 # 1. Dataset & Character Tokenizer with 90/10 Train/Validation Split
 # -----------------------------------------------------------------------------
-corpus_path = "${sampleDataName}"
+corpus_path = "input.txt"
 if not os.path.exists(corpus_path):
-    print("--> Creating default Technical Interview corpus (${sampleDataName})...")
+    print("--> Creating default Technical Interview corpus (input.txt)...")
     starter_corpus = """INTERVIEWER: Welcome to the evaluation session. Could you describe your background?
 CANDIDATE: I specialize in distributed systems, foundation models, and attention mechanisms.
 INTERVIEWER: What occurs during the forward pass of a causal transformer block?
@@ -111,6 +106,10 @@ def estimate_loss(model: nn.Module):
 # 2. Transformer Architecture (1 Transformer Block Decoder-Only GPT)
 # -----------------------------------------------------------------------------
 class CausalSelfAttention(nn.Module):
+    """
+    Multi-Head Causal Self-Attention block.
+    Matches MicroGPT in the browser visualizer.
+    """
     def __init__(self, n_embd: int, n_head: int, block_size: int):
         super().__init__()
         assert n_embd % n_head == 0
@@ -124,19 +123,23 @@ class CausalSelfAttention(nn.Module):
 
     def forward(self, x: torch.Tensor):
         B, T, C = x.shape
-        q = self.q_proj(x).view(B, T, self.n_head, self.head_dim).transpose(1, 2)
-        k = self.k_proj(x).view(B, T, self.n_head, self.head_dim).transpose(1, 2)
-        v = self.v_proj(x).view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+        q = self.q_proj(x).view(B, T, self.n_head, self.head_dim).transpose(1, 2) # (B, nh, T, hs)
+        k = self.k_proj(x).view(B, T, self.n_head, self.head_dim).transpose(1, 2) # (B, nh, T, hs)
+        v = self.v_proj(x).view(B, T, self.n_head, self.head_dim).transpose(1, 2) # (B, nh, T, hs)
 
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(self.head_dim))
         att = att.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
 
-        y = att @ v
+        y = att @ v # (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         return self.out_proj(y)
 
 class MLP(nn.Module):
+    """
+    Position-wise Feed-Forward Network: Linear -> ReLU -> Linear
+    Matches MicroGPT MLP layer dimensions (4 * n_embd).
+    """
     def __init__(self, n_embd: int):
         super().__init__()
         self.c_fc = nn.Linear(n_embd, 4 * n_embd, bias=True)
@@ -146,6 +149,9 @@ class MLP(nn.Module):
         return self.c_proj(F.relu(self.c_fc(x)))
 
 class TransformerBlock(nn.Module):
+    """
+    Single Decoder Block: x + Attention(LayerNorm(x)) + MLP(LayerNorm(x))
+    """
     def __init__(self, n_embd: int, n_head: int, block_size: int):
         super().__init__()
         self.ln_1 = nn.LayerNorm(n_embd)
@@ -175,11 +181,11 @@ class TinyGPT(nn.Module):
         B, T = idx.shape
         pos = torch.arange(0, T, dtype=torch.long, device=idx.device)
 
-        tok_emb = self.wte(idx)
-        pos_emb = self.wpe(pos)
-        x = tok_emb + pos_emb
-        x = self.block(x)
-        logits = self.lm_head(x)
+        tok_emb = self.wte(idx)           # (B, T, n_embd)
+        pos_emb = self.wpe(pos)           # (T, n_embd)
+        x = tok_emb + pos_emb             # (B, T, n_embd)
+        x = self.block(x)                 # (B, T, n_embd)
+        logits = self.lm_head(x)          # (B, T, vocab_size)
 
         loss = None
         if targets is not None:
@@ -211,7 +217,7 @@ print(f"--> Architecture: 1 Transformer Block | Parameters: {param_count:,}")
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-2)
 
 initial_loss = math.log(vocab_size)
-print(f"--> Initial Theoretical Random Loss: -ln(1/{vocab_size}) = {initial_loss:.4f}\\n")
+print(f"--> Initial Theoretical Random Loss: -ln(1/{vocab_size}) = {initial_loss:.4f}\n")
 
 print(f"{'Step':>6} | {'Train Loss':>11} | {'Val Loss':>10} | {'Perplexity':>11}")
 print("-" * 48)
@@ -244,8 +250,9 @@ torch.save({
         'n_layer': 1
     }
 }, checkpoint_pt_path)
-print(f"\\n--> Saved PyTorch binary checkpoint: {checkpoint_pt_path}")
+print(f"\n--> Saved PyTorch binary checkpoint: {checkpoint_pt_path}")
 
+# Export weights in exact tensor shape for MicroGPT browser visualizer
 def export_for_browser_visualizer(output_path="tiny_gpt_weights.json"):
     sd = model.state_dict()
     export_data = {
@@ -258,16 +265,22 @@ def export_for_browser_visualizer(output_path="tiny_gpt_weights.json"):
         },
         "vocab": chars,
         "weights": {
+            # wte: (vocab_size, n_embd)
             "wte": sd["wte.weight"].detach().cpu().numpy().flatten().tolist(),
+            # wpe: (block_size, n_embd)
             "wpe": sd["wpe.weight"].detach().cpu().numpy().flatten().tolist(),
+            # wq, wk, wv, wo: (n_embd, n_embd)
             "wq": sd["block.attn.q_proj.weight"].detach().cpu().numpy().flatten().tolist(),
             "wk": sd["block.attn.k_proj.weight"].detach().cpu().numpy().flatten().tolist(),
             "wv": sd["block.attn.v_proj.weight"].detach().cpu().numpy().flatten().tolist(),
             "wo": sd["block.attn.out_proj.weight"].detach().cpu().numpy().flatten().tolist(),
+            # w1: (n_embd, 4 * n_embd)
             "w1": sd["block.mlp.c_fc.weight"].detach().cpu().t().numpy().flatten().tolist(),
             "b1": sd["block.mlp.c_fc.bias"].detach().cpu().numpy().flatten().tolist(),
+            # w2: (4 * n_embd, n_embd)
             "w2": sd["block.mlp.c_proj.weight"].detach().cpu().t().numpy().flatten().tolist(),
             "b2": sd["block.mlp.c_proj.bias"].detach().cpu().numpy().flatten().tolist(),
+            # lmHead: (n_embd, vocab_size)
             "lmHead": sd["lm_head.weight"].detach().cpu().t().numpy().flatten().tolist()
         }
     }
@@ -281,58 +294,11 @@ export_for_browser_visualizer()
 # -----------------------------------------------------------------------------
 # 5. Autoregressive Sample Generation
 # -----------------------------------------------------------------------------
-print("\\n" + "=" * 55)
+print("\n" + "=" * 55)
 print("Sample Model Generation from Trained Checkpoint:")
 print("=" * 55)
 prompt = "INTERVIEWER:"
 context = torch.tensor([encode(prompt)], dtype=torch.long, device=device)
 output_indices = model.generate(context, max_new_tokens=180, temperature=0.7)[0].tolist()
 print(decode(output_indices))
-print("=" * 55 + "\\n")
-`;
-}
-
-export function generateColabNotebookJSON(config: ModelConfig): string {
-  const pythonScript = generatePyTorchScript(config);
-  const notebook = {
-    nbformat: 4,
-    nbformat_minor: 0,
-    metadata: {
-      colab: { name: "TinyGPT_Pretraining_From_Scratch.ipynb", provenance: [] },
-      kernelspec: { name: "python3", display_name: "Python 3" },
-      language_info: { name: "python" }
-    },
-    cells: [
-      {
-        cell_type: "markdown",
-        metadata: {},
-        source: [
-          "# TinyGPT: Smallest 'From Scratch' Pretraining Experiment\n",
-          "This notebook implements a complete Decoder-Only Transformer (like GPT-2) in single-file PyTorch.\n",
-          "1. Pretrains on raw text\n",
-          "2. Watches loss drop\n",
-          "3. Saves `tiny_gpt_weights.pt`\n",
-          "4. Generates text autoregressively"
-        ]
-      },
-      {
-        cell_type: "code",
-        execution_count: null,
-        metadata: {},
-        outputs: [],
-        source: [
-          "!nvidia-smi\n",
-          "!pip install -q torch"
-        ]
-      },
-      {
-        cell_type: "code",
-        execution_count: null,
-        metadata: {},
-        outputs: [],
-        source: [pythonScript]
-      }
-    ]
-  };
-  return JSON.stringify(notebook, null, 2);
-}
+print("=" * 55 + "\n")

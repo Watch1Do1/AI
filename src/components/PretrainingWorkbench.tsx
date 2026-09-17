@@ -14,7 +14,7 @@ interface PretrainingWorkbenchProps {
   onGenerate: (prompt: string, temp: number, topK: number, maxTokens: number) => { text: string; tokens: number[]; attention: AttentionHeadData[] };
   datasetTitle: string;
   initialTheoreticalLoss: number;
-  onImportWeights?: (data: any) => boolean;
+  onImportWeights?: (data: any) => { success: boolean; error?: string } | boolean;
   weightSource?: 'browser' | 'pytorch';
 }
 
@@ -45,6 +45,7 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
 
   const [showImportModal, setShowImportModal] = useState<boolean>(false);
   const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [importErrorMessage, setImportErrorMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -54,17 +55,35 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
     reader.onload = (event) => {
       try {
         const json = JSON.parse(event.target?.result as string);
-        if (onImportWeights && onImportWeights(json)) {
-          setImportStatus('success');
-          setTimeout(() => {
-            setShowImportModal(false);
-            setImportStatus(null);
-          }, 1500);
-        } else {
-          setImportStatus('error');
+        if (onImportWeights) {
+          const res = onImportWeights(json);
+          if (typeof res === 'object') {
+            if (res.success) {
+              setImportStatus('success');
+              setImportErrorMessage(null);
+              setTimeout(() => {
+                setShowImportModal(false);
+                setImportStatus(null);
+              }, 1500);
+            } else {
+              setImportStatus('error');
+              setImportErrorMessage(res.error || 'Tensor shapes do not match MicroGPT model configuration.');
+            }
+          } else if (res === true) {
+            setImportStatus('success');
+            setImportErrorMessage(null);
+            setTimeout(() => {
+              setShowImportModal(false);
+              setImportStatus(null);
+            }, 1500);
+          } else {
+            setImportStatus('error');
+            setImportErrorMessage('Tensor shapes do not match MicroGPT model configuration.');
+          }
         }
-      } catch (err) {
+      } catch (err: any) {
         setImportStatus('error');
+        setImportErrorMessage('Invalid JSON syntax: ' + (err?.message || 'Check weights file'));
       }
     };
     reader.readAsText(file);
@@ -73,28 +92,46 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
   const pythonExportCode = generateWeightExportPythonCode();
   const latestMetric = metricsHistory[metricsHistory.length - 1];
   const currentLoss = latestMetric ? latestMetric.loss : initialTheoreticalLoss;
+  const currentValLoss = latestMetric?.valLoss !== undefined ? latestMetric.valLoss : currentLoss;
   const currentStep = latestMetric ? latestMetric.step : 0;
   const initialLoss = metricsHistory[0]?.loss || initialTheoreticalLoss;
   const lossDropPct = initialLoss > 0 ? Math.max(0, ((initialLoss - currentLoss) / initialLoss) * 100) : 0;
 
-  // Compute SVG coordinates for the loss curve
-  const chartSvgPath = useMemo(() => {
-    if (metricsHistory.length < 2) return '';
+  // Compute SVG coordinates for train and validation loss curves
+  const { trainSvgPath, valSvgPath } = useMemo(() => {
+    if (metricsHistory.length < 2) return { trainSvgPath: '', valSvgPath: '' };
     const width = 600;
     const height = 180;
     const padding = 20;
 
-    const minLoss = Math.min(...metricsHistory.map(m => m.loss), 1.0);
-    const maxLoss = Math.max(...metricsHistory.map(m => m.loss), initialTheoreticalLoss);
+    const allValues = [
+      ...metricsHistory.map(m => m.loss),
+      ...metricsHistory.map(m => m.valLoss !== undefined ? m.valLoss : m.loss),
+      1.0,
+      initialTheoreticalLoss
+    ];
+
+    const minLoss = Math.min(...allValues);
+    const maxLoss = Math.max(...allValues);
     const lossRange = Math.max(0.5, maxLoss - minLoss);
 
-    const points = metricsHistory.map((m, idx) => {
+    const trainPoints = metricsHistory.map((m, idx) => {
       const x = padding + (idx / (metricsHistory.length - 1)) * (width - 2 * padding);
       const y = height - padding - ((m.loss - minLoss) / lossRange) * (height - 2 * padding);
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     });
 
-    return `M ${points.join(' L ')}`;
+    const valPoints = metricsHistory.map((m, idx) => {
+      const vLoss = m.valLoss !== undefined ? m.valLoss : m.loss;
+      const x = padding + (idx / (metricsHistory.length - 1)) * (width - 2 * padding);
+      const y = height - padding - ((vLoss - minLoss) / lossRange) * (height - 2 * padding);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    });
+
+    return {
+      trainSvgPath: `M ${trainPoints.join(' L ')}`,
+      valSvgPath: `M ${valPoints.join(' L ')}`
+    };
   }, [metricsHistory, initialTheoreticalLoss]);
 
   const handleRunGenerate = () => {
@@ -109,17 +146,34 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
       {/* Top Banner: Context and Experiment Overview */}
       <div className="bg-zinc-900 text-white rounded-2xl p-6 border border-zinc-800 relative overflow-hidden shadow-sm">
         <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-          <div className="space-y-2 max-w-2xl">
-            <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-zinc-800/90 text-zinc-300 text-xs font-mono">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Experiment Phase: {currentStep === 0 ? 'Fresh Initialization' : isTraining ? 'Pretraining in Progress' : 'Checkpoint Paused'}</span>
+          <div className="space-y-2.5 max-w-2xl">
+            <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-800/90 text-zinc-300">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span>Phase: {currentStep === 0 ? 'Fresh Init' : isTraining ? 'Pretraining Active' : 'Paused'}</span>
+              </span>
+              <span className="px-2.5 py-1 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 font-medium">
+                1 Transformer Block (Hardcoded)
+              </span>
+              <span className="px-2.5 py-1 rounded-full bg-sky-950 text-sky-300 border border-sky-800 font-medium">
+                90% Train / 10% Val Split
+              </span>
             </div>
             <h1 className="text-2xl font-bold tracking-tight text-zinc-100">
-              Smallest "From Scratch" LLM Pretrainer
+              TinyGPT Pretraining Lab
             </h1>
-            <p className="text-sm text-zinc-400 leading-relaxed">
-              Witness next-token causal language model pretraining right in your browser. Watch the cross-entropy loss descend from random chance (~{initialTheoreticalLoss.toFixed(2)}) as the transformer discovers character sequences, bigrams, and syntax on <span className="text-zinc-200 font-medium">"{datasetTitle}"</span>.
+            <p className="text-sm text-zinc-300 leading-relaxed">
+              Autoregressive causal language model pretraining from scratch. Watch cross-entropy loss and validation loss descend from random chance (~{initialTheoreticalLoss.toFixed(2)}) on <span className="text-zinc-100 font-semibold">"{datasetTitle}"</span>.
             </p>
+            <div className="p-3 bg-zinc-950/70 rounded-xl border border-zinc-800/80 text-xs text-zinc-400 space-y-1">
+              <div className="font-semibold text-zinc-200 flex items-center gap-1.5">
+                <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
+                <span>Engine Implementation Note</span>
+              </div>
+              <p className="leading-normal">
+                The architecture is strictly <strong className="text-zinc-200">1 transformer block</strong>. The browser <code className="text-zinc-200 font-mono">trainStep</code> updates token & position embeddings, MLP projections (w1, b1, w2, b2), and lm_head for interactive visualization, but <strong className="text-amber-300">does not fully backprop through self-attention</strong>. Full analytic backpropagation through attention is executed in PyTorch via <code className="text-emerald-300 font-mono">python/train_tiny_gpt.py</code>.
+              </p>
+            </div>
           </div>
 
           <div className="flex flex-wrap lg:flex-nowrap items-center gap-3">
@@ -182,7 +236,11 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
                 <h3 className="text-base font-bold text-zinc-900">Import Trained PyTorch Weights</h3>
               </div>
               <button
-                onClick={() => setShowImportModal(false)}
+                onClick={() => {
+                  setShowImportModal(false);
+                  setImportStatus(null);
+                  setImportErrorMessage(null);
+                }}
                 className="text-zinc-400 hover:text-zinc-700 font-bold p-1"
               >
                 ✕
@@ -190,7 +248,7 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
             </div>
 
             <p className="text-zinc-600 leading-relaxed">
-              Step 2 in the roadmap: <em>"Train the .pt file in Colab/PyTorch as the source of truth; keep the browser engine as a visualizer."</em>
+              Step 2 in the roadmap: <em>"Train the .pt file in Colab/PyTorch as the source of truth; keep the browser engine as a visualizer."</em> Weights will only be loaded if all tensor shapes strictly match the 1-block MicroGPT configuration.
             </p>
 
             <div className="p-4 bg-zinc-50 rounded-xl border-2 border-dashed border-zinc-300 text-center space-y-2">
@@ -215,20 +273,25 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
 
             {importStatus === 'success' && (
               <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-800 flex items-center gap-2">
-                <Check className="w-4 h-4 text-emerald-600" />
-                <span>PyTorch checkpoint successfully loaded! Visualizer updated.</span>
+                <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>PyTorch checkpoint successfully verified and loaded into 1-block visualizer!</span>
               </div>
             )}
 
             {importStatus === 'error' && (
-              <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-800 flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 text-rose-600" />
-                <span>Invalid weights format. Ensure you used export_model_for_browser_visualizer()</span>
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-800 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <div className="space-y-0.5">
+                  <div className="font-semibold">Import Rejected: Tensor Shape Mismatch</div>
+                  <div className="text-[11px] text-rose-700 leading-snug">
+                    {importErrorMessage || 'Tensor shapes in file do not match MicroGPT model parameters.'}
+                  </div>
+                </div>
               </div>
             )}
 
             <div className="space-y-1.5">
-              <div className="text-[11px] font-semibold text-zinc-700">How to export from Python:</div>
+              <div className="text-[11px] font-semibold text-zinc-700">How to export from Python (python/train_tiny_gpt.py):</div>
               <div className="p-3 bg-zinc-950 text-zinc-300 font-mono text-[11px] rounded-lg overflow-x-auto max-h-36">
                 <pre>{pythonExportCode}</pre>
               </div>
@@ -238,7 +301,7 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
       )}
 
       {/* Telemetry Dashboard Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         
         <div className="bg-white p-4 rounded-xl border border-zinc-200/80 shadow-xs">
           <div className="text-xs font-medium text-zinc-500 mb-1">Pretraining Step</div>
@@ -249,7 +312,10 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-zinc-200/80 shadow-xs">
-          <div className="text-xs font-medium text-zinc-500 mb-1">Cross-Entropy Loss</div>
+          <div className="text-xs font-medium text-zinc-500 mb-1 flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+            <span>Train Loss (90%)</span>
+          </div>
           <div className="flex items-baseline gap-2">
             <div className={`text-2xl font-bold font-mono ${currentLoss < 2.5 ? 'text-emerald-600' : 'text-zinc-900'}`}>
               {currentLoss.toFixed(4)}
@@ -261,21 +327,36 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
             )}
           </div>
           <div className="text-[11px] text-zinc-600 mt-1">
-            Random Baseline: ~{initialTheoreticalLoss.toFixed(2)}
+            Base: ~{initialTheoreticalLoss.toFixed(2)}
           </div>
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-zinc-200/80 shadow-xs">
-          <div className="text-xs font-medium text-zinc-500 mb-1">Perplexity (exp(Loss))</div>
+          <div className="text-xs font-medium text-zinc-500 mb-1 flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-sky-500" />
+            <span>Val Loss (10%)</span>
+          </div>
+          <div className="flex items-baseline gap-2">
+            <div className={`text-2xl font-bold font-mono ${currentValLoss < 2.5 ? 'text-sky-600' : 'text-zinc-900'}`}>
+              {currentValLoss.toFixed(4)}
+            </div>
+          </div>
+          <div className="text-[11px] text-zinc-600 mt-1">
+            Unseen validation split
+          </div>
+        </div>
+
+        <div className="bg-white p-4 rounded-xl border border-zinc-200/80 shadow-xs">
+          <div className="text-xs font-medium text-zinc-500 mb-1">Perplexity</div>
           <div className="text-2xl font-bold font-mono text-zinc-900">
             {Math.min(9999, Math.exp(currentLoss)).toFixed(1)}
           </div>
           <div className="text-[11px] text-zinc-600 mt-1">
-            Lower is better (vocab uncertainty)
+            exp(Train Loss)
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-xl border border-zinc-200/80 shadow-xs">
+        <div className="bg-white p-4 rounded-xl border border-zinc-200/80 shadow-xs col-span-2 md:col-span-1">
           <div className="text-xs font-medium text-zinc-500 mb-1">Tokens Processed</div>
           <div className="text-2xl font-bold font-mono text-zinc-900">
             {latestMetric ? latestMetric.tokensProcessed.toLocaleString() : '0'}
@@ -292,7 +373,7 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zinc-100">
           <div>
             <h2 className="text-base font-semibold text-zinc-900">Pretraining Loss Curve</h2>
-            <p className="text-xs text-zinc-500">Real-time negative log likelihood during stochastic gradient descent</p>
+            <p className="text-xs text-zinc-500">Real-time negative log likelihood on 90% training split vs. 10% validation split</p>
           </div>
 
           <div className="flex items-center gap-3">
@@ -322,7 +403,7 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
 
         {/* Expandable Hyperparameters Drawer */}
         {showHyperparams && (
-          <div className="p-4 rounded-xl bg-zinc-50 border border-zinc-200 grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
+          <div className="p-4 rounded-xl bg-zinc-50 border border-zinc-200 grid grid-cols-2 sm:grid-cols-5 gap-4 text-xs">
             <div>
               <label className="block text-zinc-600 font-medium mb-1">Learning Rate</label>
               <select
@@ -373,20 +454,37 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
                 <option value={4}>4 Heads</option>
               </select>
             </div>
+
+            <div>
+              <label className="block text-zinc-600 font-medium mb-1">Transformer Depth</label>
+              <div className="w-full bg-zinc-200/80 border border-zinc-300 rounded-md px-2.5 py-1.5 text-zinc-700 font-mono text-xs flex items-center justify-between">
+                <span>1 Block</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-zinc-300 text-zinc-700 font-sans font-medium">Hardcoded</span>
+              </div>
+            </div>
           </div>
         )}
 
         {/* SVG Loss Curve Display */}
-        <div className="relative w-full h-48 bg-zinc-950 rounded-xl p-3 overflow-hidden font-mono text-xs flex flex-col justify-between">
-          <div className="flex justify-between items-center text-zinc-500 text-[11px] z-10">
-            <span>Theoretical Random (~{initialTheoreticalLoss.toFixed(2)})</span>
-            <span className="text-emerald-400">Current: {currentLoss.toFixed(3)}</span>
+        <div className="relative w-full h-52 bg-zinc-950 rounded-xl p-3 overflow-hidden font-mono text-xs flex flex-col justify-between">
+          <div className="flex flex-wrap justify-between items-center gap-2 text-zinc-400 text-[11px] z-10">
+            <span>Theoretical Baseline: ~{initialTheoreticalLoss.toFixed(2)}</span>
+            <div className="flex items-center gap-4">
+              <span className="flex items-center gap-1.5 text-emerald-400">
+                <span className="w-2.5 h-1 bg-emerald-400 inline-block rounded-xs" />
+                Train Loss: {currentLoss.toFixed(3)}
+              </span>
+              <span className="flex items-center gap-1.5 text-sky-400">
+                <span className="w-2.5 h-1 bg-sky-400 inline-block rounded-xs" />
+                Val Loss (10%): {currentValLoss.toFixed(3)}
+              </span>
+            </div>
           </div>
 
           {metricsHistory.length < 2 ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-zinc-500 gap-2">
               <RefreshCw className="w-5 h-5 animate-spin text-zinc-600" />
-              <span>Click "Start Pretraining" to record steps & plot real loss</span>
+              <span>Click "Start Pretraining" to record steps & plot train vs. val loss</span>
             </div>
           ) : (
             <svg viewBox="0 0 600 180" className="w-full h-full preserve-3d" preserveAspectRatio="none">
@@ -394,17 +492,32 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
               <line x1="20" y1="25" x2="580" y2="25" stroke="#3f3f46" strokeDasharray="4 4" strokeWidth="1" />
               
               {/* Target threshold line at ~2.0 */}
-              <line x1="20" y1="120" x2="580" y2="120" stroke="#10b981" strokeOpacity="0.3" strokeDasharray="3 3" strokeWidth="1" />
+              <line x1="20" y1="120" x2="580" y2="120" stroke="#10b981" strokeOpacity="0.25" strokeDasharray="3 3" strokeWidth="1" />
 
-              {/* Loss Area and Line */}
-              <path
-                d={chartSvgPath}
-                fill="none"
-                stroke="#10b981"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
+              {/* Validation Loss Line (Sky Blue) */}
+              {valSvgPath && (
+                <path
+                  d={valSvgPath}
+                  fill="none"
+                  stroke="#38bdf8"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeDasharray="4 2"
+                />
+              )}
+
+              {/* Train Loss Line (Emerald) */}
+              {trainSvgPath && (
+                <path
+                  d={trainSvgPath}
+                  fill="none"
+                  stroke="#10b981"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              )}
             </svg>
           )}
 

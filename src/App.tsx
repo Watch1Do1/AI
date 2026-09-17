@@ -11,7 +11,7 @@ import { ArchitectureDiagram } from './components/ArchitectureDiagram';
 import { CharTokenizer } from './engine/tokenizer';
 import { MicroGPT } from './engine/transformer';
 import { CORPUS_PRESETS } from './engine/datasets';
-import { loadSerializedWeightsIntoModel, SerializedWeights } from './engine/weightBridge';
+import { loadSerializedWeightsIntoModel, validateAndLoadSerializedWeights, SerializedWeights } from './engine/weightBridge';
 import { ModelConfig, TrainingMetrics, AttentionHeadData } from './types';
 
 export default function App() {
@@ -87,51 +87,116 @@ export default function App() {
     setWeightSource('browser');
   };
 
-  // Import trained PyTorch weights into browser visualizer
-  const handleImportWeights = (data: any): boolean => {
+  // Import trained PyTorch weights into browser visualizer with strict shape validation
+  const handleImportWeights = (data: any): { success: boolean; error?: string } => {
     try {
-      const ok = loadSerializedWeightsIntoModel(modelRef.current, data as SerializedWeights);
-      if (ok) {
+      const validation = validateAndLoadSerializedWeights(modelRef.current, data as SerializedWeights);
+      if (validation.success) {
         setIsTraining(false);
         setWeightSource('pytorch');
-        setCurrentLoss(1.85); // typical converged loss
+
+        // Evaluate loss on 10% validation split with imported weights
+        const encoded = tokenizerRef.current.encode(currentCorpusText);
+        const splitIndex = Math.floor(0.9 * encoded.length);
+        const trainTokens = encoded.slice(0, splitIndex);
+        const valTokens = encoded.slice(splitIndex);
+
+        let tLoss = 1.85;
+        let vLoss = 1.95;
+
+        if (trainTokens.length > config.blockSize + 1) {
+          const tBatch = [{
+            input: trainTokens.slice(0, config.blockSize),
+            target: trainTokens.slice(1, config.blockSize + 1)
+          }];
+          tLoss = modelRef.current.evaluateLoss(tBatch);
+        }
+
+        if (valTokens.length > config.blockSize + 1) {
+          const vBatch = [{
+            input: valTokens.slice(0, config.blockSize),
+            target: valTokens.slice(1, config.blockSize + 1)
+          }];
+          vLoss = modelRef.current.evaluateLoss(vBatch);
+        }
+
+        setCurrentLoss(tLoss);
         setStep(1000);
-        return true;
+
+        setMetricsHistory(prev => [
+          ...prev,
+          {
+            step: 1000,
+            loss: tLoss,
+            valLoss: vLoss,
+            perplexity: Math.exp(Math.min(10, tLoss)),
+            tokensProcessed: tokensProcessedRef.current,
+            tokensPerSec: 0,
+            timestamp: Date.now()
+          }
+        ]);
+
+        return { success: true };
       }
-      return false;
-    } catch (e) {
-      console.error(e);
-      return false;
+      return { success: false, error: validation.error };
+    } catch (e: any) {
+      console.error("Weight import error:", e);
+      return { success: false, error: e?.message || 'Failed to parse weights file.' };
     }
   };
 
-  // Single training step helper
+  // Single training step helper with 90% train / 10% validation split
   const executeTrainingStep = useCallback((batchSize: number = config.batchSize) => {
     const encoded = tokenizerRef.current.encode(currentCorpusText);
-    if (encoded.length <= config.blockSize + 1) return { loss: 0, perplexity: 1 };
+    if (encoded.length <= config.blockSize + 2) return { loss: 0, valLoss: 0, perplexity: 1 };
+
+    // 90% train tokens, 10% validation tokens
+    const splitIndex = Math.floor(0.9 * encoded.length);
+    const trainTokens = encoded.slice(0, splitIndex);
+    const valTokens = encoded.slice(splitIndex);
 
     const batch: { input: number[]; target: number[] }[] = [];
-    for (let b = 0; b < batchSize; b++) {
-      const maxStart = encoded.length - config.blockSize - 1;
-      const start = Math.floor(Math.random() * maxStart);
-      const input = encoded.slice(start, start + config.blockSize);
-      const target = encoded.slice(start + 1, start + config.blockSize + 1);
-      batch.push({ input, target });
+    const maxTrainStart = trainTokens.length - config.blockSize - 1;
+    if (maxTrainStart > 0) {
+      for (let b = 0; b < batchSize; b++) {
+        const start = Math.floor(Math.random() * maxTrainStart);
+        const input = trainTokens.slice(start, start + config.blockSize);
+        const target = trainTokens.slice(start + 1, start + config.blockSize + 1);
+        batch.push({ input, target });
+      }
     }
 
     const res = modelRef.current.trainStep(batch, config.lr);
     tokensProcessedRef.current += batchSize * config.blockSize;
 
-    return res;
+    // Evaluate on 10% validation split
+    let valLoss = res.loss;
+    const maxValStart = valTokens.length - config.blockSize - 1;
+    if (maxValStart > 0) {
+      const valBatch: { input: number[]; target: number[] }[] = [];
+      const valSamples = Math.min(4, batchSize);
+      for (let b = 0; b < valSamples; b++) {
+        const vStart = Math.floor(Math.random() * maxValStart);
+        valBatch.push({
+          input: valTokens.slice(vStart, vStart + config.blockSize),
+          target: valTokens.slice(vStart + 1, vStart + config.blockSize + 1)
+        });
+      }
+      valLoss = modelRef.current.evaluateLoss(valBatch);
+    }
+
+    return { loss: res.loss, valLoss, perplexity: res.perplexity };
   }, [currentCorpusText, config]);
 
   // Step button handler (e.g. +10 steps)
   const handleManualStep = (count: number = 10) => {
     let lastLoss = 0;
+    let lastValLoss = 0;
     let lastPerp = 0;
     for (let i = 0; i < count; i++) {
-      const { loss, perplexity } = executeTrainingStep(config.batchSize);
+      const { loss, valLoss, perplexity } = executeTrainingStep(config.batchSize);
       lastLoss = loss;
+      lastValLoss = valLoss;
       lastPerp = perplexity;
     }
 
@@ -145,6 +210,7 @@ export default function App() {
         {
           step: newStep,
           loss: lastLoss,
+          valLoss: lastValLoss,
           perplexity: lastPerp,
           tokensProcessed: tokensProcessedRef.current,
           tokensPerSec: 0,
@@ -166,10 +232,12 @@ export default function App() {
       if (!isTrainingRef.current) return;
 
       let lastLoss = 0;
+      let lastValLoss = 0;
       let lastPerp = 0;
       for (let s = 0; s < 3; s++) {
-        const { loss, perplexity } = executeTrainingStep(config.batchSize);
+        const { loss, valLoss, perplexity } = executeTrainingStep(config.batchSize);
         lastLoss = loss;
+        lastValLoss = valLoss;
         lastPerp = perplexity;
         localStep++;
       }
@@ -183,6 +251,7 @@ export default function App() {
           {
             step: localStep,
             loss: lastLoss,
+            valLoss: lastValLoss,
             perplexity: lastPerp,
             tokensProcessed: tokensProcessedRef.current,
             tokensPerSec: 3 * config.batchSize * config.blockSize * 60,

@@ -69,23 +69,86 @@ def export_model_for_browser_visualizer(model, vocab, config, output_path="tiny_
 `;
 }
 
-export function loadSerializedWeightsIntoModel(model: MicroGPT, data: SerializedWeights): boolean {
-  try {
-    const w = data.weights;
-    if (w.wte && w.wte.length === model.wte.length) model.wte.set(w.wte);
-    if (w.wpe && w.wpe.length === model.wpe.length) model.wpe.set(w.wpe);
-    if (w.wq && w.wq.length === model.wq.length) model.wq.set(w.wq);
-    if (w.wk && w.wk.length === model.wk.length) model.wk.set(w.wk);
-    if (w.wv && w.wv.length === model.wv.length) model.wv.set(w.wv);
-    if (w.wo && w.wo.length === model.wo.length) model.wo.set(w.wo);
-    if (w.w1 && w.w1.length === model.w1.length) model.w1.set(w.w1);
-    if (w.b1 && w.b1.length === model.b1.length) model.b1.set(w.b1);
-    if (w.w2 && w.w2.length === model.w2.length) model.w2.set(w.w2);
-    if (w.b2 && w.b2.length === model.b2.length) model.b2.set(w.b2);
-    if (w.lmHead && w.lmHead.length === model.lmHead.length) model.lmHead.set(w.lmHead);
-    return true;
-  } catch (err) {
-    console.error("Failed to load weights into model:", err);
-    return false;
+export interface WeightValidationResult {
+  success: boolean;
+  error?: string;
+  tensorsValidated?: number;
+  totalElements?: number;
+}
+
+export function validateAndLoadSerializedWeights(
+  model: MicroGPT,
+  data: SerializedWeights
+): WeightValidationResult {
+  if (!data || typeof data !== 'object') {
+    return { success: false, error: 'Invalid file format: JSON root must be an object.' };
   }
+
+  if (!data.weights || typeof data.weights !== 'object') {
+    return { success: false, error: 'Invalid file format: missing "weights" dictionary.' };
+  }
+
+  const { vocabSize, blockSize, nEmbd } = model.config;
+  const mlpHidden = 4 * nEmbd;
+
+  // Exact tensor specifications and expected lengths
+  const tensorDefs: Array<{
+    name: keyof SerializedWeights['weights'];
+    expectedLength: number;
+    shapeDesc: string;
+    target: Float32Array;
+  }> = [
+    { name: 'wte', expectedLength: vocabSize * nEmbd, shapeDesc: `(${vocabSize}, ${nEmbd})`, target: model.wte },
+    { name: 'wpe', expectedLength: blockSize * nEmbd, shapeDesc: `(${blockSize}, ${nEmbd})`, target: model.wpe },
+    { name: 'wq', expectedLength: nEmbd * nEmbd, shapeDesc: `(${nEmbd}, ${nEmbd})`, target: model.wq },
+    { name: 'wk', expectedLength: nEmbd * nEmbd, shapeDesc: `(${nEmbd}, ${nEmbd})`, target: model.wk },
+    { name: 'wv', expectedLength: nEmbd * nEmbd, shapeDesc: `(${nEmbd}, ${nEmbd})`, target: model.wv },
+    { name: 'wo', expectedLength: nEmbd * nEmbd, shapeDesc: `(${nEmbd}, ${nEmbd})`, target: model.wo },
+    { name: 'w1', expectedLength: nEmbd * mlpHidden, shapeDesc: `(${nEmbd}, ${mlpHidden})`, target: model.w1 },
+    { name: 'b1', expectedLength: mlpHidden, shapeDesc: `(${mlpHidden},)`, target: model.b1 },
+    { name: 'w2', expectedLength: mlpHidden * nEmbd, shapeDesc: `(${mlpHidden}, ${nEmbd})`, target: model.w2 },
+    { name: 'b2', expectedLength: nEmbd, shapeDesc: `(${nEmbd},)`, target: model.b2 },
+    { name: 'lmHead', expectedLength: nEmbd * vocabSize, shapeDesc: `(${nEmbd}, ${vocabSize})`, target: model.lmHead },
+  ];
+
+  let totalElements = 0;
+
+  // STRICT VALIDATION: Check every tensor before modifying model state
+  for (const def of tensorDefs) {
+    const arr = data.weights[def.name];
+    if (!arr || !Array.isArray(arr)) {
+      return {
+        success: false,
+        error: `Import rejected: Missing or invalid tensor "${def.name}". Required shape: ${def.shapeDesc} (length ${def.expectedLength}).`
+      };
+    }
+
+    if (arr.length !== def.expectedLength) {
+      return {
+        success: false,
+        error: `Import rejected: Tensor shape mismatch for "${def.name}". Expected length ${def.expectedLength} ${def.shapeDesc}, but received ${arr.length}. Ensure your PyTorch model config matches (vocabSize: ${vocabSize}, blockSize: ${blockSize}, nEmbd: ${nEmbd}).`
+      };
+    }
+
+    totalElements += arr.length;
+  }
+
+  // All shapes strictly match -> atomically copy into model Float32Arrays
+  for (const def of tensorDefs) {
+    const arr = data.weights[def.name];
+    def.target.set(arr);
+  }
+
+  return {
+    success: true,
+    tensorsValidated: tensorDefs.length,
+    totalElements
+  };
+}
+
+export function loadSerializedWeightsIntoModel(
+  model: MicroGPT,
+  data: SerializedWeights
+): { success: boolean; error?: string } {
+  return validateAndLoadSerializedWeights(model, data);
 }

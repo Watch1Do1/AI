@@ -4,242 +4,291 @@ export function generatePyTorchScript(config: ModelConfig, sampleDataName: strin
   return `"""
 train_tiny_gpt.py
 =================
-The smallest, complete "from scratch" GPT pretraining experiment in PyTorch.
-Pretrains a minimal causal language model (Decoder-Only Transformer) on any text file,
-saves a checkpoint, and generates new text.
+TinyGPT Pretraining Lab: Standalone 1-File PyTorch Pretraining Script
+File location: python/train_tiny_gpt.py
+
+Pretrains a minimal 1-block causal language model (Decoder-Only Transformer) on any text,
+evaluates train/val loss, saves checkpoint weights, generates autoregressive text,
+and exports browser-compatible JSON weights for the TinyGPT visualizer.
 
 Prerequisites:
-  pip install torch
+    pip install torch
 
 Usage:
-  python train_tiny_gpt.py
+    python python/train_tiny_gpt.py
+    # or inside python/ directory:
+    cd python && python train_tiny_gpt.py
 """
 
-import math
 import os
+import sys
+import json
+import math
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
 # -----------------------------------------------------------------------------
-# Hyperparameters
+# Hyperparameters (Matching TinyGPT Pretraining Lab config)
 # -----------------------------------------------------------------------------
-batch_size = ${config.batchSize}         # Sequences processed in parallel
+batch_size = ${config.batchSize}          # Sequences processed in parallel per step
 block_size = ${config.blockSize}         # Maximum context length (tokens)
-max_iters = 1000          # Training steps
-eval_interval = 100       # How often to check validation loss
-learning_rate = ${config.lr}      # AdamW learning rate
+n_embd = ${config.nEmbd}             # Embedding dimension
+n_head = ${config.nHead}              # Number of attention heads
+n_layer = 1             # 1 Transformer block (MicroGPT architecture)
+learning_rate = ${config.lr}   # Learning rate for AdamW
+max_iters = 1000        # Total optimization steps
+eval_interval = 100     # Evaluation frequency
+eval_iters = 40         # Batches to average for train/val loss
 device = 'cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu')
-eval_iters = 50
-n_embd = ${config.nEmbd}            # Embedding vector dimension
-n_head = ${config.nHead}             # Attention heads
-n_layer = ${config.nLayer}            # Transformer blocks
-dropout = 0.1
-checkpoint_file = 'tiny_gpt_weights.pt'
 
 torch.manual_seed(1337)
-print(f"--> Using compute device: {device.upper()}")
+print(f"--> [TinyGPT] Compute device: {device.upper()}")
 
 # -----------------------------------------------------------------------------
-# 1. Dataset & Character Tokenizer
+# 1. Dataset & Character Tokenizer with 90/10 Train/Validation Split
 # -----------------------------------------------------------------------------
-# Put your text in 'input.txt'. If not found, a starter interview corpus is generated.
-data_path = '${sampleDataName}'
-if not os.path.exists(data_path):
-    print(f"Creating default sample training corpus: {data_path}")
-    sample_text = """INTERVIEWER: Welcome. Could you describe your background?
-CANDIDATE: I specialize in distributed systems and neural networks.
-INTERVIEWER: What is the forward pass of a transformer?
-CANDIDATE: Token embeddings and positional vectors pass through multi-head self-attention and MLP layers.
-INTERVIEWER: How do we attach memory to a foundation model?
-CANDIDATE: We store explicit facts in a key-value or vector index and retrieve them into the context window.
+corpus_path = "${sampleDataName}"
+if not os.path.exists(corpus_path):
+    print("--> Creating default Technical Interview corpus (${sampleDataName})...")
+    starter_corpus = """INTERVIEWER: Welcome to the evaluation session. Could you describe your background?
+CANDIDATE: I specialize in distributed systems, foundation models, and attention mechanisms.
+INTERVIEWER: What occurs during the forward pass of a causal transformer block?
+CANDIDATE: Input tokens are converted into token embeddings and augmented with positional vectors.
+INTERVIEWER: And inside the multi-head attention layer?
+CANDIDATE: Queries and keys compute dot-product attention scores, normalized by sqrt(d_k), masked causally, and multiplied by values.
+INTERVIEWER: Why does the browser trainer decouple fast heuristics from PyTorch?
+CANDIDATE: JavaScript computes forward activations and linear backprop for real-time visualization, while PyTorch performs full analytic backprop through attention.
+INTERVIEWER: How do we attach persistent memory to a frozen foundation model?
+CANDIDATE: We store explicit facts in an external vector index and retrieve relevant snippets into the prompt context window.
 """ * 40
-    with open(data_path, 'w', encoding='utf-8') as f:
-        f.write(sample_text)
+    with open(corpus_path, "w", encoding="utf-8") as f:
+        f.write(starter_corpus)
 
-with open(data_path, 'r', encoding='utf-8') as f:
+with open(corpus_path, "r", encoding="utf-8") as f:
     text = f.read()
 
 chars = sorted(list(set(text)))
 vocab_size = len(chars)
-print(f"Corpus length: {len(text):,} characters | Unique vocabulary: {vocab_size} characters")
+print(f"--> Corpus: {len(text):,} characters | Unique Vocabulary: {vocab_size} tokens")
 
 stoi = {ch: i for i, ch in enumerate(chars)}
 itos = {i: ch for i, ch in enumerate(chars)}
 encode = lambda s: [stoi[c] for c in s if c in stoi]
 decode = lambda l: ''.join([itos[i] for i in l])
 
+# 90% train, 10% validation split
 data = torch.tensor(encode(text), dtype=torch.long)
-n = int(0.9 * len(data))
-train_data = data[:n]
-val_data = data[n:]
+n_split = int(0.9 * len(data))
+train_data = data[:n_split]
+val_data = data[n_split:]
+print(f"--> Split: {len(train_data):,} train tokens (90%) | {len(val_data):,} val tokens (10%)")
 
-def get_batch(split):
-    d = train_data if split == 'train' else val_data
-    if len(d) <= block_size:
-        d = train_data
-    ix = torch.randint(len(d) - block_size, (batch_size,))
-    x = torch.stack([d[i:i+block_size] for i in ix])
-    y = torch.stack([d[i+1:i+block_size+1] for i in ix])
+def get_batch(split: str):
+    source = train_data if split == 'train' else val_data
+    if len(source) <= block_size + 1:
+        source = train_data
+    ix = torch.randint(len(source) - block_size - 1, (batch_size,))
+    x = torch.stack([source[i:i + block_size] for i in ix])
+    y = torch.stack([source[i + 1:i + block_size + 1] for i in ix])
     return x.to(device), y.to(device)
 
 @torch.no_grad()
-def estimate_loss(model):
+def estimate_loss(model: nn.Module):
     out = {}
     model.eval()
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
-            X, Y = get_batch(split)
-            logits, loss = model(X, Y)
+            x, y = get_batch(split)
+            _, loss = model(x, y)
             losses[k] = loss.item()
-        out[split] = losses.mean()
+        out[split] = losses.mean().item()
     model.train()
     return out
 
 # -----------------------------------------------------------------------------
-# 2. Transformer Architecture (Decoder-Only GPT)
+# 2. Transformer Architecture (1 Transformer Block Decoder-Only GPT)
 # -----------------------------------------------------------------------------
-class Head(nn.Module):
-    """ One head of masked causal self-attention """
-    def __init__(self, head_size):
+class CausalSelfAttention(nn.Module):
+    def __init__(self, n_embd: int, n_head: int, block_size: int):
         super().__init__()
-        self.key = nn.Linear(n_embd, head_size, bias=False)
-        self.query = nn.Linear(n_embd, head_size, bias=False)
-        self.value = nn.Linear(n_embd, head_size, bias=False)
+        assert n_embd % n_head == 0
+        self.n_head = n_head
+        self.head_dim = n_embd // n_head
+        self.q_proj = nn.Linear(n_embd, n_embd, bias=False)
+        self.k_proj = nn.Linear(n_embd, n_embd, bias=False)
+        self.v_proj = nn.Linear(n_embd, n_embd, bias=False)
+        self.out_proj = nn.Linear(n_embd, n_embd, bias=False)
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
-        self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor):
         B, T, C = x.shape
-        k = self.key(x)   # (B, T, head_size)
-        q = self.query(x) # (B, T, head_size)
-        wei = q @ k.transpose(-2, -1) * (k.shape[-1] ** -0.5)
-        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
-        wei = F.softmax(wei, dim=-1)
-        wei = self.dropout(wei)
-        v = self.value(x)
-        return wei @ v
+        q = self.q_proj(x).view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+        k = self.k_proj(x).view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x).view(B, T, self.n_head, self.head_dim).transpose(1, 2)
 
-class MultiHeadAttention(nn.Module):
-    def __init__(self, num_heads, head_size):
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(self.head_dim))
+        att = att.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
+        att = F.softmax(att, dim=-1)
+
+        y = att @ v
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        return self.out_proj(y)
+
+class MLP(nn.Module):
+    def __init__(self, n_embd: int):
         super().__init__()
-        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
-        self.proj = nn.Linear(head_size * num_heads, n_embd)
-        self.dropout = nn.Dropout(dropout)
+        self.c_fc = nn.Linear(n_embd, 4 * n_embd, bias=True)
+        self.c_proj = nn.Linear(4 * n_embd, n_embd, bias=True)
 
-    def forward(self, x):
-        out = torch.cat([h(x) for h in self.heads], dim=-1)
-        return self.dropout(self.proj(out))
+    def forward(self, x: torch.Tensor):
+        return self.c_proj(F.relu(self.c_fc(x)))
 
-class FeedForward(nn.Module):
-    def __init__(self, n_embd):
+class TransformerBlock(nn.Module):
+    def __init__(self, n_embd: int, n_head: int, block_size: int):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(n_embd, 4 * n_embd),
-            nn.GELU(),
-            nn.Linear(4 * n_embd, n_embd),
-            nn.Dropout(dropout),
-        )
+        self.ln_1 = nn.LayerNorm(n_embd)
+        self.attn = CausalSelfAttention(n_embd, n_head, block_size)
+        self.ln_2 = nn.LayerNorm(n_embd)
+        self.mlp = MLP(n_embd)
 
-    def forward(self, x):
-        return self.net(x)
-
-class Block(nn.Module):
-    def __init__(self, n_embd, n_head):
-        super().__init__()
-        head_size = n_embd // n_head
-        self.sa = MultiHeadAttention(n_head, head_size)
-        self.ffwd = FeedForward(n_embd)
-        self.ln1 = nn.LayerNorm(n_embd)
-        self.ln2 = nn.LayerNorm(n_embd)
-
-    def forward(self, x):
-        x = x + self.sa(self.ln1(x))
-        x = x + self.ffwd(self.ln2(x))
+    def forward(self, x: torch.Tensor):
+        x = x + self.attn(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
         return x
 
 class TinyGPT(nn.Module):
-    def __init__(self):
+    def __init__(self, vocab_size: int, block_size: int, n_embd: int, n_head: int):
         super().__init__()
-        self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
-        self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        self.blocks = nn.Sequential(*[Block(n_embd, n_head=n_head) for _ in range(n_layer)])
-        self.ln_f = nn.LayerNorm(n_embd)
-        self.lm_head = nn.Linear(n_embd, vocab_size)
+        self.vocab_size = vocab_size
+        self.block_size = block_size
+        self.n_embd = n_embd
+        self.n_head = n_head
 
-    def forward(self, idx, targets=None):
+        self.wte = nn.Embedding(vocab_size, n_embd)
+        self.wpe = nn.Embedding(block_size, n_embd)
+        self.block = TransformerBlock(n_embd, n_head, block_size)
+        self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)
+
+    def forward(self, idx: torch.Tensor, targets: torch.Tensor = None):
         B, T = idx.shape
-        tok_emb = self.token_embedding_table(idx) # (B, T, C)
-        pos_emb = self.position_embedding_table(torch.arange(T, device=device)) # (T, C)
-        x = tok_emb + pos_emb
-        x = self.blocks(x)
-        x = self.ln_f(x)
-        logits = self.lm_head(x) # (B, T, vocab_size)
+        pos = torch.arange(0, T, dtype=torch.long, device=idx.device)
 
-        if targets is None:
-            loss = None
-        else:
-            B, T, C = logits.shape
-            logits = logits.view(B * T, C)
-            targets = targets.view(B * T)
-            loss = F.cross_entropy(logits, targets)
+        tok_emb = self.wte(idx)
+        pos_emb = self.wpe(pos)
+        x = tok_emb + pos_emb
+        x = self.block(x)
+        logits = self.lm_head(x)
+
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, self.vocab_size), targets.view(-1))
 
         return logits, loss
 
-    def generate(self, idx, max_new_tokens, temperature=0.8):
+    @torch.no_grad()
+    def generate(self, idx: torch.Tensor, max_new_tokens: int = 150, temperature: float = 0.8, top_k: int = 10):
         for _ in range(max_new_tokens):
-            idx_cond = idx[:, -block_size:]
+            idx_cond = idx[:, -self.block_size:]
             logits, _ = self(idx_cond)
-            logits = logits[:, -1, :] / temperature
+            logits = logits[:, -1, :] / max(0.1, temperature)
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float('Inf')
             probs = F.softmax(logits, dim=-1)
             idx_next = torch.multinomial(probs, num_samples=1)
             idx = torch.cat((idx, idx_next), dim=1)
         return idx
 
 # -----------------------------------------------------------------------------
-# 3. Training Loop & Checkpoint Saving
+# 3. Training & Validation Loop
 # -----------------------------------------------------------------------------
-model = TinyGPT().to(device)
+model = TinyGPT(vocab_size, block_size, n_embd, n_head).to(device)
 param_count = sum(p.numel() for p in model.parameters())
-print(f"Total model parameters: {param_count:,}")
+print(f"--> Architecture: 1 Transformer Block | Parameters: {param_count:,}")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-2)
 
-print("\\n--> Starting Pretraining from Scratch...")
-for iter in range(max_iters):
-    if iter % eval_interval == 0 or iter == max_iters - 1:
+initial_loss = math.log(vocab_size)
+print(f"--> Initial Theoretical Random Loss: -ln(1/{vocab_size}) = {initial_loss:.4f}\\n")
+
+print(f"{'Step':>6} | {'Train Loss':>11} | {'Val Loss':>10} | {'Perplexity':>11}")
+print("-" * 48)
+
+for step in range(max_iters + 1):
+    if step % eval_interval == 0:
         losses = estimate_loss(model)
-        print(f"Step {iter:4d}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        perp = math.exp(min(10, losses['val']))
+        print(f"{step:6d} | {losses['train']:11.4f} | {losses['val']:10.4f} | {perp:11.2f}")
 
     xb, yb = get_batch('train')
     logits, loss = model(xb, yb)
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     optimizer.step()
 
-# Save checkpoint weights
+# -----------------------------------------------------------------------------
+# 4. Save PyTorch .pt Checkpoint & Browser-Compatible .json Weights
+# -----------------------------------------------------------------------------
+checkpoint_pt_path = "tiny_gpt_weights.pt"
 torch.save({
     'model_state_dict': model.state_dict(),
     'vocab': chars,
     'config': {
+        'vocab_size': vocab_size,
         'block_size': block_size,
         'n_embd': n_embd,
         'n_head': n_head,
-        'n_layer': n_layer
+        'n_layer': 1
     }
-}, checkpoint_file)
-print(f"\\n--> Checkpoint weights successfully saved to: {checkpoint_file}")
+}, checkpoint_pt_path)
+print(f"\\n--> Saved PyTorch binary checkpoint: {checkpoint_pt_path}")
+
+def export_for_browser_visualizer(output_path="tiny_gpt_weights.json"):
+    sd = model.state_dict()
+    export_data = {
+        "config": {
+            "vocabSize": vocab_size,
+            "blockSize": block_size,
+            "nEmbd": n_embd,
+            "nHead": n_head,
+            "nLayer": 1
+        },
+        "vocab": chars,
+        "weights": {
+            "wte": sd["wte.weight"].detach().cpu().numpy().flatten().tolist(),
+            "wpe": sd["wpe.weight"].detach().cpu().numpy().flatten().tolist(),
+            "wq": sd["block.attn.q_proj.weight"].detach().cpu().numpy().flatten().tolist(),
+            "wk": sd["block.attn.k_proj.weight"].detach().cpu().numpy().flatten().tolist(),
+            "wv": sd["block.attn.v_proj.weight"].detach().cpu().numpy().flatten().tolist(),
+            "wo": sd["block.attn.out_proj.weight"].detach().cpu().numpy().flatten().tolist(),
+            "w1": sd["block.mlp.c_fc.weight"].detach().cpu().t().numpy().flatten().tolist(),
+            "b1": sd["block.mlp.c_fc.bias"].detach().cpu().numpy().flatten().tolist(),
+            "w2": sd["block.mlp.c_proj.weight"].detach().cpu().t().numpy().flatten().tolist(),
+            "b2": sd["block.mlp.c_proj.bias"].detach().cpu().numpy().flatten().tolist(),
+            "lmHead": sd["lm_head.weight"].detach().cpu().t().numpy().flatten().tolist()
+        }
+    }
+    with open(output_path, "w") as f:
+        json.dump(export_data, f)
+    print(f"--> Saved browser-compatible visualizer weights: {output_path}")
+    print(f"--> You can now drag-and-drop '{output_path}' directly into the TinyGPT web visualizer!")
+
+export_for_browser_visualizer()
 
 # -----------------------------------------------------------------------------
-# 4. Generate Text from Saved Model
+# 5. Autoregressive Sample Generation
 # -----------------------------------------------------------------------------
-print("\\n--> Sample Generation from Trained Model:")
-context = torch.tensor([encode("INTERVIEWER:")], dtype=torch.long, device=device)
-output_tokens = model.generate(context, max_new_tokens=200, temperature=0.8)[0].tolist()
-print("-" * 50)
-print(decode(output_tokens))
-print("-" * 50)
+print("\\n" + "=" * 55)
+print("Sample Model Generation from Trained Checkpoint:")
+print("=" * 55)
+prompt = "INTERVIEWER:"
+context = torch.tensor([encode(prompt)], dtype=torch.long, device=device)
+output_indices = model.generate(context, max_new_tokens=180, temperature=0.7)[0].tolist()
+print(decode(output_indices))
+print("=" * 55 + "\\n")
 `;
 }
 

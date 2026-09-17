@@ -40,16 +40,18 @@ export const PyTorchScriptExporter: React.FC<PyTorchScriptExporterProps> = ({ co
     URL.revokeObjectURL(url);
   };
 
-  const bashInstructions = `# 1. Create a clean project folder & virtual environment
-mkdir tiny-gpt-lab && cd tiny-gpt-lab
+  const bashInstructions = `# 1. Clone or inspect repository file:
+# Location: python/train_tiny_gpt.py
+
+# 2. Create virtual environment & install PyTorch
 python3 -m venv venv
 source venv/bin/activate   # On Windows: venv\\Scripts\\activate
-
-# 2. Install standard PyTorch (CPU or GPU)
 pip install torch
 
-# 3. Run the complete training script
-python train_tiny_gpt.py`;
+# 3. Run the standalone 1-block training script
+python python/train_tiny_gpt.py
+
+# 4. Drag & drop the generated 'tiny_gpt_weights.json' directly into Pretraining Workbench!`;
 
   const handleCopyBash = () => {
     navigator.clipboard.writeText(bashInstructions);
@@ -62,25 +64,31 @@ python train_tiny_gpt.py`;
       
       {/* Overview Banner */}
       <div className="bg-emerald-950 text-white rounded-2xl p-6 border border-emerald-900 shadow-sm space-y-3">
-        <div className="flex items-center gap-2 text-emerald-300 text-xs font-mono font-semibold">
-          <Terminal className="w-4 h-4 text-emerald-400" />
-          <span>Smallest Real Experiment Blueprint</span>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-emerald-300 text-xs font-mono font-semibold">
+            <Terminal className="w-4 h-4 text-emerald-400" />
+            <span>Standalone 1-File PyTorch Script (python/train_tiny_gpt.py)</span>
+          </div>
+          <span className="px-2.5 py-0.5 rounded-full bg-emerald-900/90 text-emerald-300 border border-emerald-700 text-[11px] font-mono">
+            1 Transformer Block
+          </span>
         </div>
         <h2 className="text-xl font-bold text-emerald-50">
-          Standalone 1-File PyTorch Pretraining Script
+          Standalone PyTorch Pretraining Script
         </h2>
         <p className="text-sm text-emerald-200/90 leading-relaxed">
-          Zero complex framework dependencies. This standalone ~150-line script is a fully functional causal Decoder-Only Transformer (GPT architecture). It runs on CPU, Apple Silicon MPS, or NVIDIA CUDA, creates a dataset file, trains until loss drops, saves <code className="bg-emerald-900/80 px-1.5 py-0.5 rounded text-white font-mono text-xs">tiny_gpt_weights.pt</code>, and generates autoregressive text.
+          Zero complex framework dependencies. This standalone script is located at <code className="bg-emerald-900/90 px-1.5 py-0.5 rounded text-white font-mono text-xs">python/train_tiny_gpt.py</code> in the workspace. It is a fully functional causal Decoder-Only Transformer (1 block GPT architecture) with 90/10 train/val split, AdamW optimizer, checkpoint saving, text generation, and automatic export to <code className="bg-emerald-900/90 px-1.5 py-0.5 rounded text-white font-mono text-xs">tiny_gpt_weights.json</code> for instant import into the browser visualizer.
         </p>
 
         <div className="flex flex-wrap gap-3 pt-2">
-          <button
-            onClick={handleDownloadPy}
+          <a
+            href="/api/download/train_tiny_gpt.py"
+            download="train_tiny_gpt.py"
             className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 text-xs font-semibold transition-colors shadow-sm"
           >
             <Download className="w-4 h-4" />
-            <span>Download train_tiny_gpt.py</span>
-          </button>
+            <span>Download python/train_tiny_gpt.py</span>
+          </a>
 
           <button
             onClick={handleDownloadColab}
