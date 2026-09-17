@@ -1,0 +1,6 @@
+{
+  "name": "TinyGPT Pretraining Lab",
+  "description": "Interactive from-scratch minimal language model pretraining laboratory, live transformer trainer, PyTorch code generator, and memory architecture bridge.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
