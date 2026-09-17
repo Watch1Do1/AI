@@ -297,7 +297,7 @@ export_for_browser_visualizer()
 print("\n" + "=" * 55)
 print("Sample Model Generation from Trained Checkpoint:")
 print("=" * 55)
-prompt = "INTERVIEWER:"
+prompt = "First Citizen:\n"
 context = torch.tensor([encode(prompt)], dtype=torch.long, device=device)
 output_indices = model.generate(context, max_new_tokens=180, temperature=0.7)[0].tolist()
 print(decode(output_indices))
