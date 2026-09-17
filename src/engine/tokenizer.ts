@@ -31,6 +31,19 @@ export class CharTokenizer {
     this.unkTokenId = 0;
   }
 
+  // Load an explicit vocabulary array as-is without prepending <unk> (e.g. from PyTorch export)
+  setVocab(vocab: string[]): void {
+    this.charToId.clear();
+    this.idToChar.clear();
+    this.chars = [...vocab];
+    this.chars.forEach((ch, idx) => {
+      this.charToId.set(ch, idx);
+      this.idToChar.set(idx, ch);
+    });
+    const unkIdx = this.charToId.get('<unk>');
+    this.unkTokenId = unkIdx !== undefined ? unkIdx : -1;
+  }
+
   encode(text: string): number[] {
     const tokens: number[] = [];
     for (let i = 0; i < text.length; i++) {
@@ -38,8 +51,11 @@ export class CharTokenizer {
       const id = this.charToId.get(ch);
       if (id !== undefined) {
         tokens.push(id);
-      } else {
+      } else if (this.unkTokenId !== -1) {
         tokens.push(this.unkTokenId);
+      } else {
+        // Fallback gracefully when character is out-of-vocab and no <unk> exists
+        tokens.push(0);
       }
     }
     return tokens;
@@ -48,7 +64,7 @@ export class CharTokenizer {
   decode(tokens: number[]): string {
     let result = '';
     for (const token of tokens) {
-      if (token === this.unkTokenId) {
+      if (this.unkTokenId !== -1 && token === this.unkTokenId) {
         result += '?';
       } else {
         result += this.idToChar.get(token) ?? '';

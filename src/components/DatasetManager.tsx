@@ -8,13 +8,17 @@ interface DatasetManagerProps {
   onSelectCorpus: (text: string, title: string) => void;
   selectedTitle: string;
   tokenizerData: TokenizerData;
+  applyConfirmation?: { activeTitle: string; vocabSize: number; paramCount: number } | null;
+  paramCount?: number;
 }
 
 export const DatasetManager: React.FC<DatasetManagerProps> = ({
   currentCorpus,
   onSelectCorpus,
   selectedTitle,
-  tokenizerData
+  tokenizerData,
+  applyConfirmation,
+  paramCount
 }) => {
   const [customText, setCustomText] = useState('');
   const [customTitle, setCustomTitle] = useState('My Custom Dataset');
@@ -74,6 +78,30 @@ export const DatasetManager: React.FC<DatasetManagerProps> = ({
   return (
     <div className="space-y-6">
       
+      {/* Visible Confirmation after Apply to Model */}
+      {applyConfirmation && (
+        <div id="dataset-applied-confirmation-banner" className="p-4 bg-emerald-50 border border-emerald-300 rounded-2xl text-emerald-950 space-y-2 shadow-xs">
+          <div className="flex items-center gap-2 font-bold text-emerald-900 text-xs">
+            <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>Applied to Model Successfully</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 font-mono text-xs">
+            <div className="bg-white/90 p-2.5 rounded-lg border border-emerald-200">
+              <div className="text-[10px] uppercase tracking-wider text-emerald-800 font-sans font-medium">Active Title</div>
+              <div className="font-bold text-zinc-900 truncate" title={applyConfirmation.activeTitle}>{applyConfirmation.activeTitle}</div>
+            </div>
+            <div className="bg-white/90 p-2.5 rounded-lg border border-emerald-200">
+              <div className="text-[10px] uppercase tracking-wider text-emerald-800 font-sans font-medium">New Vocab Size V</div>
+              <div className="font-bold text-zinc-900">{applyConfirmation.vocabSize}</div>
+            </div>
+            <div className="bg-white/90 p-2.5 rounded-lg border border-emerald-200">
+              <div className="text-[10px] uppercase tracking-wider text-emerald-800 font-sans font-medium">New Param Count</div>
+              <div className="font-bold text-zinc-900">{applyConfirmation.paramCount.toLocaleString()}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header Info */}
       <div className="bg-white rounded-2xl border border-zinc-200 p-5 shadow-xs space-y-2">
         <div className="flex items-center justify-between">
@@ -192,6 +220,16 @@ export const DatasetManager: React.FC<DatasetManagerProps> = ({
               Apply to Model
             </button>
           </div>
+
+          {applyConfirmation && (
+            <div id="custom-text-applied-confirmation" className="p-2.5 bg-emerald-50/90 border border-emerald-300 rounded-xl text-emerald-950 text-xs flex flex-wrap items-center gap-2">
+              <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+              <div className="font-mono text-[11px]">
+                <span className="font-sans font-semibold text-emerald-900">Applied to Model: </span>
+                Active Title: <strong className="text-zinc-900">{applyConfirmation.activeTitle}</strong> · New Vocab Size V: <strong className="text-zinc-900">{applyConfirmation.vocabSize}</strong> · New Param Count: <strong className="text-zinc-900">{applyConfirmation.paramCount.toLocaleString()}</strong>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* AI Dataset Synthesizer */}

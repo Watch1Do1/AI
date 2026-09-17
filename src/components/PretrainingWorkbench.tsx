@@ -14,8 +14,9 @@ interface PretrainingWorkbenchProps {
   onGenerate: (prompt: string, temp: number, topK: number, maxTokens: number) => { text: string; tokens: number[]; attention: AttentionHeadData[] };
   datasetTitle: string;
   initialTheoreticalLoss: number;
-  onImportWeights?: (data: any) => { success: boolean; error?: string } | boolean;
+  onImportWeights?: (data: any, customTitle?: string) => { success: boolean; error?: string; activeTitle?: string; vocabSize?: number; paramCount?: number } | boolean;
   weightSource?: 'browser' | 'pytorch';
+  applyConfirmation?: { activeTitle: string; vocabSize: number; paramCount: number } | null;
 }
 
 export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
@@ -30,7 +31,8 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
   datasetTitle,
   initialTheoreticalLoss,
   onImportWeights,
-  weightSource = 'browser'
+  weightSource = 'browser',
+  applyConfirmation
 }) => {
   const [prompt, setPrompt] = useState('INTERVIEWER:');
   const [temperature, setTemperature] = useState(0.7);
@@ -46,7 +48,44 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
   const [showImportModal, setShowImportModal] = useState<boolean>(false);
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const [importErrorMessage, setImportErrorMessage] = useState<string | null>(null);
+  const [stagedWeights, setStagedWeights] = useState<{
+    json: any;
+    fileName: string;
+    vocabSize: number;
+    nEmbd: number;
+  } | null>(null);
+  const [modalConfirmation, setModalConfirmation] = useState<{
+    activeTitle: string;
+    vocabSize: number;
+    paramCount: number;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const executeApplyWeights = (json: any, fileName?: string) => {
+    if (!onImportWeights) return;
+    const res = onImportWeights(json, fileName);
+    if (typeof res === 'object') {
+      if (res.success) {
+        setImportStatus('success');
+        setImportErrorMessage(null);
+        const conf = {
+          activeTitle: res.activeTitle || fileName || 'Imported Checkpoint',
+          vocabSize: res.vocabSize || json.vocab?.length || json.config?.vocabSize || 65,
+          paramCount: res.paramCount || 0
+        };
+        setModalConfirmation(conf);
+      } else {
+        setImportStatus('error');
+        setImportErrorMessage(res.error || 'Tensor shapes do not match MicroGPT model configuration.');
+      }
+    } else if (res === true) {
+      setImportStatus('success');
+      setImportErrorMessage(null);
+    } else {
+      setImportStatus('error');
+      setImportErrorMessage('Tensor shapes do not match MicroGPT model configuration.');
+    }
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -55,32 +94,22 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
     reader.onload = (event) => {
       try {
         const json = JSON.parse(event.target?.result as string);
-        if (onImportWeights) {
-          const res = onImportWeights(json);
-          if (typeof res === 'object') {
-            if (res.success) {
-              setImportStatus('success');
-              setImportErrorMessage(null);
-              setTimeout(() => {
-                setShowImportModal(false);
-                setImportStatus(null);
-              }, 1500);
-            } else {
-              setImportStatus('error');
-              setImportErrorMessage(res.error || 'Tensor shapes do not match MicroGPT model configuration.');
-            }
-          } else if (res === true) {
-            setImportStatus('success');
-            setImportErrorMessage(null);
-            setTimeout(() => {
-              setShowImportModal(false);
-              setImportStatus(null);
-            }, 1500);
-          } else {
-            setImportStatus('error');
-            setImportErrorMessage('Tensor shapes do not match MicroGPT model configuration.');
-          }
-        }
+        const detectedVocabSize = Array.isArray(json.vocab)
+          ? json.vocab.length
+          : (json.config?.vocabSize || json.config?.vocab_size || 0);
+        const detectedNEmbd = json.config?.nEmbd || json.config?.n_embd || 32;
+
+        setStagedWeights({
+          json,
+          fileName: file.name,
+          vocabSize: detectedVocabSize,
+          nEmbd: detectedNEmbd
+        });
+        setImportStatus(null);
+        setImportErrorMessage(null);
+
+        // Apply immediately upon selection as well
+        executeApplyWeights(json, file.name);
       } catch (err: any) {
         setImportStatus('error');
         setImportErrorMessage('Invalid JSON syntax: ' + (err?.message || 'Check weights file'));
@@ -143,6 +172,32 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
   return (
     <div className="space-y-6">
       
+      {/* Visible Confirmation Banner after Apply to Model */}
+      {(applyConfirmation || modalConfirmation) && (
+        <div id="workbench-applied-confirmation-banner" className="p-4 bg-emerald-50 border border-emerald-300 rounded-2xl text-emerald-950 space-y-2 shadow-xs">
+          <div className="flex items-center gap-2 font-bold text-emerald-900 text-xs">
+            <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>Applied to Model Successfully</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 font-mono text-xs">
+            <div className="bg-white/90 p-2.5 rounded-lg border border-emerald-200">
+              <div className="text-[10px] uppercase tracking-wider text-emerald-800 font-sans font-medium">Active Title</div>
+              <div className="font-bold text-zinc-900 truncate" title={(applyConfirmation || modalConfirmation)?.activeTitle}>
+                {(applyConfirmation || modalConfirmation)?.activeTitle}
+              </div>
+            </div>
+            <div className="bg-white/90 p-2.5 rounded-lg border border-emerald-200">
+              <div className="text-[10px] uppercase tracking-wider text-emerald-800 font-sans font-medium">New Vocab Size V</div>
+              <div className="font-bold text-zinc-900">{(applyConfirmation || modalConfirmation)?.vocabSize}</div>
+            </div>
+            <div className="bg-white/90 p-2.5 rounded-lg border border-emerald-200">
+              <div className="text-[10px] uppercase tracking-wider text-emerald-800 font-sans font-medium">New Param Count</div>
+              <div className="font-bold text-zinc-900">{(applyConfirmation || modalConfirmation)?.paramCount.toLocaleString()}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Top Banner: Context and Experiment Overview */}
       <div className="bg-zinc-900 text-white rounded-2xl p-6 border border-zinc-800 relative overflow-hidden shadow-sm">
         <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
@@ -271,10 +326,46 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
               </button>
             </div>
 
-            {importStatus === 'success' && (
-              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-800 flex items-center gap-2">
-                <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>PyTorch checkpoint successfully verified and loaded into 1-block visualizer!</span>
+            {stagedWeights && (
+              <div className="p-3 bg-zinc-100 rounded-xl border border-zinc-200 flex items-center justify-between gap-3">
+                <div className="font-mono text-[11px] truncate text-left">
+                  <span className="font-semibold text-zinc-900 block truncate">{stagedWeights.fileName}</span>
+                  <span className="text-zinc-500">Detected Vocab: V={stagedWeights.vocabSize} · Embed: d={stagedWeights.nEmbd}</span>
+                </div>
+                <button
+                  id="apply-to-model-btn"
+                  onClick={() => executeApplyWeights(stagedWeights.json, stagedWeights.fileName)}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg shadow-xs transition-colors shrink-0 flex items-center gap-1.5"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Apply to Model</span>
+                </button>
+              </div>
+            )}
+
+            {/* Visible confirmation after Apply to Model */}
+            {(modalConfirmation || applyConfirmation) && (
+              <div id="modal-applied-confirmation" className="p-4 bg-emerald-50 border border-emerald-300 rounded-xl text-emerald-950 space-y-2">
+                <div className="flex items-center gap-2 font-bold text-emerald-900 text-xs">
+                  <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Applied to Model Successfully!</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 font-mono text-xs">
+                  <div className="bg-white/90 p-2 rounded-lg border border-emerald-200">
+                    <div className="text-[10px] uppercase tracking-wider text-emerald-800 font-sans font-medium">Active Title</div>
+                    <div className="font-bold text-zinc-900 truncate" title={(modalConfirmation || applyConfirmation)?.activeTitle}>
+                      {(modalConfirmation || applyConfirmation)?.activeTitle}
+                    </div>
+                  </div>
+                  <div className="bg-white/90 p-2 rounded-lg border border-emerald-200">
+                    <div className="text-[10px] uppercase tracking-wider text-emerald-800 font-sans font-medium">New Vocab Size V</div>
+                    <div className="font-bold text-zinc-900">{(modalConfirmation || applyConfirmation)?.vocabSize}</div>
+                  </div>
+                  <div className="bg-white/90 p-2 rounded-lg border border-emerald-200">
+                    <div className="text-[10px] uppercase tracking-wider text-emerald-800 font-sans font-medium">New Param Count</div>
+                    <div className="font-bold text-zinc-900">{(modalConfirmation || applyConfirmation)?.paramCount?.toLocaleString()}</div>
+                  </div>
+                </div>
               </div>
             )}
 

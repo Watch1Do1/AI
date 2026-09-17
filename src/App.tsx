@@ -11,7 +11,7 @@ import { ArchitectureDiagram } from './components/ArchitectureDiagram';
 import { CharTokenizer } from './engine/tokenizer';
 import { MicroGPT } from './engine/transformer';
 import { CORPUS_PRESETS } from './engine/datasets';
-import { loadSerializedWeightsIntoModel, validateAndLoadSerializedWeights, SerializedWeights } from './engine/weightBridge';
+import { loadSerializedWeightsIntoModel, validateAndLoadSerializedWeights, rebuildMicroGPTFromSerializedWeights, SerializedWeights } from './engine/weightBridge';
 import { ModelConfig, TrainingMetrics, AttentionHeadData } from './types';
 
 export default function App() {
@@ -24,6 +24,13 @@ export default function App() {
   const [currentCorpusTitle, setCurrentCorpusTitle] = useState<string>(CORPUS_PRESETS[0].title);
   const tokenizerRef = useRef<CharTokenizer>(new CharTokenizer(CORPUS_PRESETS[0].text));
   const [tokenizerData, setTokenizerData] = useState(tokenizerRef.current.getData());
+
+  // Visible confirmation state after Apply to Model
+  const [applyConfirmation, setApplyConfirmation] = useState<{
+    activeTitle: string;
+    vocabSize: number;
+    paramCount: number;
+  } | null>(null);
 
   // Model Hyperparameters
   const [config, setConfig] = useState<ModelConfig>({
@@ -73,7 +80,20 @@ export default function App() {
 
     const updatedConfig = { ...config, vocabSize: tData.vocabSize };
     setConfig(updatedConfig);
-    initModel(updatedConfig);
+    modelRef.current = new MicroGPT(updatedConfig);
+    const pCount = modelRef.current.getTotalParameters();
+    setParamCount(pCount);
+    setStep(0);
+    setCurrentLoss(null);
+    setMetricsHistory([]);
+    tokensProcessedRef.current = 0;
+    setWeightSource('browser');
+
+    setApplyConfirmation({
+      activeTitle: title,
+      vocabSize: tData.vocabSize,
+      paramCount: pCount
+    });
   };
 
   // Reset current model weights
@@ -87,58 +107,105 @@ export default function App() {
     setWeightSource('browser');
   };
 
-  // Import trained PyTorch weights into browser visualizer with strict shape validation
-  const handleImportWeights = (data: any): { success: boolean; error?: string } => {
+  // Import trained PyTorch weights: rebuild MicroGPT from JSON config and vocab array
+  const handleImportWeights = (
+    data: any,
+    customTitle?: string
+  ): { success: boolean; error?: string; activeTitle?: string; vocabSize?: number; paramCount?: number } => {
     try {
-      const validation = validateAndLoadSerializedWeights(modelRef.current, data as SerializedWeights);
-      if (validation.success) {
-        setIsTraining(false);
-        setWeightSource('pytorch');
-
-        // Evaluate loss on 10% validation split with imported weights
-        const encoded = tokenizerRef.current.encode(currentCorpusText);
-        const splitIndex = Math.floor(0.9 * encoded.length);
-        const trainTokens = encoded.slice(0, splitIndex);
-        const valTokens = encoded.slice(splitIndex);
-
-        let tLoss = 1.85;
-        let vLoss = 1.95;
-
-        if (trainTokens.length > config.blockSize + 1) {
-          const tBatch = [{
-            input: trainTokens.slice(0, config.blockSize),
-            target: trainTokens.slice(1, config.blockSize + 1)
-          }];
-          tLoss = modelRef.current.evaluateLoss(tBatch);
-        }
-
-        if (valTokens.length > config.blockSize + 1) {
-          const vBatch = [{
-            input: valTokens.slice(0, config.blockSize),
-            target: valTokens.slice(1, config.blockSize + 1)
-          }];
-          vLoss = modelRef.current.evaluateLoss(vBatch);
-        }
-
-        setCurrentLoss(tLoss);
-        setStep(1000);
-
-        setMetricsHistory(prev => [
-          ...prev,
-          {
-            step: 1000,
-            loss: tLoss,
-            valLoss: vLoss,
-            perplexity: Math.exp(Math.min(10, tLoss)),
-            tokensProcessed: tokensProcessedRef.current,
-            tokensPerSec: 0,
-            timestamp: Date.now()
-          }
-        ]);
-
-        return { success: true };
+      const rebuildResult = rebuildMicroGPTFromSerializedWeights(data as SerializedWeights, config);
+      if (!rebuildResult.success || !rebuildResult.model || !rebuildResult.config) {
+        return { success: false, error: rebuildResult.error || 'Failed to rebuild model from weights.' };
       }
-      return { success: false, error: validation.error };
+
+      setIsTraining(false);
+      const newModel = rebuildResult.model;
+      const newConfig = rebuildResult.config;
+      modelRef.current = newModel;
+      setConfig(newConfig);
+
+      // Rebuild tokenizer with file's vocab as-is (e.g. 65 chars for Shakespeare, no extra <unk> token)
+      if (rebuildResult.vocab && rebuildResult.vocab.length > 0) {
+        tokenizerRef.current.setVocab(rebuildResult.vocab);
+      }
+      const tData = tokenizerRef.current.getData();
+      setTokenizerData(tData);
+
+      const newParamCount = newModel.getTotalParameters();
+      setParamCount(newParamCount);
+      setWeightSource('pytorch');
+
+      // Determine active title
+      const title =
+        customTitle ||
+        data.title ||
+        (newConfig.vocabSize === 65
+          ? 'Tiny Shakespeare (PyTorch Checkpoint)'
+          : `PyTorch Checkpoint (V=${newConfig.vocabSize})`);
+      setCurrentCorpusTitle(title);
+
+      // Align text if Shakespeare preset matches
+      if (newConfig.vocabSize === 65) {
+        const shkPreset = CORPUS_PRESETS.find(p => p.id === 'tiny_shakespeare');
+        if (shkPreset) {
+          setCurrentCorpusText(shkPreset.text);
+        }
+      }
+
+      // Evaluate loss on 10% validation split with imported weights
+      const encoded = tokenizerRef.current.encode(currentCorpusText);
+      const splitIndex = Math.floor(0.9 * encoded.length);
+      const trainTokens = encoded.slice(0, splitIndex);
+      const valTokens = encoded.slice(splitIndex);
+
+      let tLoss = 1.85;
+      let vLoss = 1.95;
+
+      if (trainTokens.length > newConfig.blockSize + 1) {
+        const tBatch = [{
+          input: trainTokens.slice(0, newConfig.blockSize),
+          target: trainTokens.slice(1, newConfig.blockSize + 1)
+        }];
+        tLoss = newModel.evaluateLoss(tBatch);
+      }
+
+      if (valTokens.length > newConfig.blockSize + 1) {
+        const vBatch = [{
+          input: valTokens.slice(0, newConfig.blockSize),
+          target: valTokens.slice(1, newConfig.blockSize + 1)
+        }];
+        vLoss = newModel.evaluateLoss(vBatch);
+      }
+
+      setCurrentLoss(tLoss);
+      setStep(1000);
+
+      setMetricsHistory(prev => [
+        ...prev,
+        {
+          step: 1000,
+          loss: tLoss,
+          valLoss: vLoss,
+          perplexity: Math.exp(Math.min(10, tLoss)),
+          tokensProcessed: tokensProcessedRef.current,
+          tokensPerSec: 0,
+          timestamp: Date.now()
+        }
+      ]);
+
+      const conf = {
+        activeTitle: title,
+        vocabSize: newConfig.vocabSize,
+        paramCount: newParamCount
+      };
+      setApplyConfirmation(conf);
+
+      return {
+        success: true,
+        activeTitle: title,
+        vocabSize: newConfig.vocabSize,
+        paramCount: newParamCount
+      };
     } catch (e: any) {
       console.error("Weight import error:", e);
       return { success: false, error: e?.message || 'Failed to parse weights file.' };
@@ -325,6 +392,7 @@ export default function App() {
             initialTheoreticalLoss={initialTheoreticalLoss}
             onImportWeights={handleImportWeights}
             weightSource={weightSource}
+            applyConfirmation={applyConfirmation}
           />
         )}
 
@@ -354,6 +422,8 @@ export default function App() {
             onSelectCorpus={handleSelectCorpus}
             selectedTitle={currentCorpusTitle}
             tokenizerData={tokenizerData}
+            applyConfirmation={applyConfirmation}
+            paramCount={paramCount}
           />
         )}
 
