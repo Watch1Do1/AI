@@ -76,9 +76,9 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-bold text-zinc-900 tracking-tight text-lg">TinyGPT</span>
+                <span className="font-bold text-zinc-900 tracking-tight text-lg">Ted</span>
                 <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-medium border border-emerald-200">
-                  Pretraining Lab
+                  Transformer Education & Development Lab
                 </span>
                 {weightSource === 'pytorch' && (
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 font-semibold border border-indigo-200 font-mono">
@@ -87,7 +87,7 @@ export const Header: React.FC<HeaderProps> = ({
                 )}
               </div>
               <p className="text-xs text-zinc-500 hidden sm:block">
-                Interactive Causal Language Model Laboratory & Mechanics Inspector
+                Transformer Education & Development Lab — Interactive Language Model Mechanics
               </p>
             </div>
           </div>

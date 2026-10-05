@@ -27,13 +27,13 @@ export const PlaygroundTourModal: React.FC<PlaygroundTourModalProps> = ({
             <div className="space-y-2 max-w-xl">
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-950 border border-emerald-800 text-emerald-300 text-xs font-mono font-medium">
                 <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-                <span>TinyGPT Pretraining Lab</span>
+                <span>Ted — Transformer Education & Development Lab</span>
               </div>
               <h2 className="text-2xl md:text-3xl font-bold tracking-tight text-white">
-                The Smallest "From Scratch" Transformer Playground
+                Interactive From-Scratch Transformer Laboratory
               </h2>
               <p className="text-zinc-300 text-xs md:text-sm leading-relaxed">
-                An interactive laboratory for the minimal causal language model pretraining experiment. From raw text bytes to multi-head self-attention, loss curves, and autoregressive token generation.
+                Welcome to Ted. An interactive laboratory for causal language model pretraining, step-through debugging, attention mechanics, loss curves, and autoregressive generation.
               </p>
             </div>
             <button
@@ -111,7 +111,7 @@ export const PlaygroundTourModal: React.FC<PlaygroundTourModalProps> = ({
                 <ArrowRight className="w-4 h-4 text-zinc-400 group-hover:translate-x-1 transition-transform" />
               </div>
               <p className="text-zinc-600 leading-relaxed text-[11px]">
-                Side-by-side benchmark comparing 1-block TinyGPT against OpenAI's 124M 12-layer GPT-2 with Shannon entropy metrics.
+                Side-by-side benchmark comparing 1-block Ted against OpenAI's 124M 12-layer GPT-2 with Shannon entropy metrics.
               </p>
             </div>
 

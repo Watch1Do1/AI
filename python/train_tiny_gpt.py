@@ -1,10 +1,11 @@
 """
 train_tiny_gpt.py
 =================
-TinyGPT Pretraining Lab: Standalone 1-File PyTorch Pretraining Script
+Ted: Transformer Education & Development Lab
+Standalone 1-File PyTorch Pretraining Script
 Pretrains a minimal 1-block causal language model (Decoder-Only Transformer) on any text,
 evaluates train/val loss, saves checkpoint weights, generates autoregressive text,
-and exports browser-compatible JSON weights for the TinyGPT visualizer.
+and exports browser-compatible JSON weights for the Ted visualizer.
 
 Prerequisites:
     pip install torch
@@ -297,7 +298,7 @@ export_for_browser_visualizer()
 print("\n" + "=" * 55)
 print("Sample Model Generation from Trained Checkpoint:")
 print("=" * 55)
-prompt = "First Citizen:\n"
+prompt = "INTERVIEWER:"
 context = torch.tensor([encode(prompt)], dtype=torch.long, device=device)
 output_indices = model.generate(context, max_new_tokens=180, temperature=0.7)[0].tolist()
 print(decode(output_indices))

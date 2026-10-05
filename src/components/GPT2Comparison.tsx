@@ -61,10 +61,10 @@ export const GPT2Comparison: React.FC<GPT2ComparisonProps> = ({ model, tokenizer
           <span>Architectural Comparison & Benchmarking</span>
         </div>
         <h2 className="text-xl font-bold text-zinc-100">
-          TinyGPT vs. GPT-2 (124M Parameter Benchmark)
+          Ted vs. GPT-2 (124M Parameter Benchmark)
         </h2>
         <p className="text-sm text-zinc-300 leading-relaxed max-w-3xl">
-          Observe how model depth, parameter scale, and tokenization revolutionize representation learning. Compare the raw 1-block browser engine against OpenAI's standard GPT-2 12-layer architecture.
+          Observe how model depth, parameter scale, and tokenization revolutionize representation learning. Compare Ted's 1-block browser engine against OpenAI's standard GPT-2 12-layer architecture.
         </p>
 
         {/* Prompt Input */}
@@ -95,12 +95,12 @@ export const GPT2Comparison: React.FC<GPT2ComparisonProps> = ({ model, tokenizer
       {/* Side-by-Side Comparison Columns */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         
-        {/* Left Column: TinyGPT */}
+        {/* Left Column: Ted */}
         <div className="bg-white rounded-2xl border border-zinc-200 p-5 shadow-xs space-y-4">
           <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
             <div>
               <div className="text-xs uppercase tracking-wider text-emerald-600 font-bold">This Laboratory</div>
-              <h3 className="text-base font-bold text-zinc-900">TinyGPT (MicroGPT)</h3>
+              <h3 className="text-base font-bold text-zinc-900">Ted (MicroGPT)</h3>
             </div>
             <span className="text-xs font-mono px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200">
               ~{model.getTotalParameters().toLocaleString()} Params

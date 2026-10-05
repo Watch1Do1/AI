@@ -132,7 +132,7 @@ export const TrainWizardModal: React.FC<TrainWizardModalProps> = ({
               <Sparkles className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-base font-bold">Train Your Own GPT Wizard</h2>
+              <h2 className="text-base font-bold">Ted: Train Your Own Model Wizard</h2>
               <p className="text-xs text-zinc-400">Guided 4-step setup from raw text to autoregressive generation</p>
             </div>
           </div>

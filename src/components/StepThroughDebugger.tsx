@@ -144,7 +144,7 @@ export const StepThroughDebugger: React.FC<StepThroughDebuggerProps> = ({
           </span>
         </div>
         <h2 className="text-xl font-bold text-zinc-100">
-          Step Through a Transformer
+          Ted: Step Through a Transformer
         </h2>
         <p className="text-sm text-zinc-300 leading-relaxed max-w-3xl">
           Walk step-by-step through a genuine forward pass of the Decoder-Only Transformer. Inspect raw activation values, tensor shapes, attention matrices, and logit probability distributions at every layer.

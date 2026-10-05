@@ -219,7 +219,7 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
               </span>
             </div>
             <h1 className="text-2xl font-bold tracking-tight text-zinc-100">
-              TinyGPT Pretraining Lab
+              Ted: Transformer Pretraining Lab
             </h1>
             <p className="text-sm text-zinc-300 leading-relaxed">
               Autoregressive causal language model pretraining from scratch. Watch cross-entropy loss and validation loss descend from random chance (~{initialTheoreticalLoss.toFixed(2)}) on <span className="text-zinc-100 font-semibold">"{datasetTitle}"</span>.

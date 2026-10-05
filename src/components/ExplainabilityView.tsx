@@ -48,7 +48,7 @@ export const ExplainabilityView: React.FC<ExplainabilityViewProps> = ({ model, t
           Model Explainability & Token Attribution
         </h2>
         <p className="text-sm text-zinc-300 leading-relaxed max-w-3xl">
-          Deconstruct why TinyGPT predicted a specific token. Inspect Shannon entropy, evaluate top-k candidate probability bars, and trace token attribution back to prior prompt tokens through attention routing.
+          Deconstruct why Ted predicted a specific token. Inspect Shannon entropy, evaluate top-k candidate probability bars, and trace token attribution back to prior prompt tokens through attention routing.
         </p>
 
         {/* Prompt Input */}

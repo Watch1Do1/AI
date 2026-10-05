@@ -35,7 +35,7 @@ export const PyTorchScriptExporter: React.FC<PyTorchScriptExporterProps> = ({ co
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'TinyGPT_Pretraining_Colab.ipynb';
+    a.download = 'Ted_Pretraining_Colab.ipynb';
     a.click();
     URL.revokeObjectURL(url);
   };
