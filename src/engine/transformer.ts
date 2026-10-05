@@ -66,6 +66,9 @@ export class MicroGPT {
   // Last cached attention maps for visualization
   lastAttentionMaps: AttentionHeadData[] = [];
 
+  // Latest gradient and activation telemetry
+  latestTelemetry: import('../types').GradientTelemetry | null = null;
+
   constructor(config: ModelConfig) {
     this.config = config;
     const { vocabSize, blockSize, nEmbd } = config;
@@ -335,7 +338,7 @@ export class MicroGPT {
   trainStep(
     batchTokens: { input: number[]; target: number[] }[],
     lr: number = this.config.lr
-  ): { loss: number; perplexity: number } {
+  ): { loss: number; perplexity: number; telemetry?: import('../types').GradientTelemetry | null } {
     const { vocabSize, nEmbd } = this.config;
     let totalLoss = 0;
     let totalTokens = 0;
@@ -464,9 +467,85 @@ export class MicroGPT {
     applyAdam('w2', this.w2, dW2);
     applyAdam('b2', this.b2, dB2);
 
+    // Compute L2 Gradient Norms
+    const norm2 = (arr: Float32Array, scale: number = invN): number => {
+      let sum = 0;
+      for (let i = 0; i < arr.length; i++) {
+        const val = arr[i] * scale;
+        sum += val * val;
+      }
+      return Math.sqrt(sum);
+    };
+
+    const wteNorm = norm2(dWte);
+    const wpeNorm = norm2(dWpe);
+    const w1Norm = norm2(dW1);
+    const w2Norm = norm2(dW2);
+    const lmHeadNorm = norm2(dLmHead);
+    const totalNorm = Math.sqrt(wteNorm * wteNorm + wpeNorm * wpeNorm + w1Norm * w1Norm + w2Norm * w2Norm + lmHeadNorm * lmHeadNorm);
+
+    // Compute basic activation statistics from the last forward pass
+    const computeActStats = (name: string, acts: Float32Array[]) => {
+      let sum = 0;
+      let sumSq = 0;
+      let min = Infinity;
+      let max = -Infinity;
+      let count = 0;
+      for (const vec of acts) {
+        for (let i = 0; i < vec.length; i++) {
+          const v = vec[i];
+          sum += v;
+          sumSq += v * v;
+          if (v < min) min = v;
+          if (v > max) max = v;
+          count++;
+        }
+      }
+      const mean = count > 0 ? sum / count : 0;
+      const variance = count > 0 ? (sumSq / count) - (mean * mean) : 0;
+      
+      // 8-bin histogram between min and max
+      const bins = [0, 0, 0, 0, 0, 0, 0, 0];
+      const range = Math.max(1e-5, max - min);
+      for (const vec of acts) {
+        for (let i = 0; i < vec.length; i++) {
+          const binIdx = Math.min(7, Math.max(0, Math.floor(((vec[i] - min) / range) * 8)));
+          bins[binIdx]++;
+        }
+      }
+      return { name, mean, variance, min: isFinite(min) ? min : 0, max: isFinite(max) ? max : 0, bins };
+    };
+
+    const lastForward = this.forward(batchTokens[0]?.input || [0], true);
+    const activationStats = [
+      computeActStats('Token Embeds (x)', lastForward.activations.x),
+      computeActStats('Post-LayerNorm (xNorm)', lastForward.activations.xNorm),
+      computeActStats('Post-Attn Residual (xMid)', lastForward.activations.xMid),
+      computeActStats('MLP Output (xFinal)', lastForward.activations.xFinal)
+    ];
+
+    this.latestTelemetry = {
+      step: this.adamStep,
+      totalNorm,
+      wteNorm,
+      wpeNorm,
+      w1Norm,
+      w2Norm,
+      lmHeadNorm,
+      isVanishing: totalNorm < 1e-4,
+      isExploding: totalNorm > 4.5,
+      activationStats,
+      attentionLogitsHeatmap: this.lastAttentionMaps.length > 0 ? {
+        headIndex: 0,
+        rawLogits: this.lastAttentionMaps[0].matrix.map(row => row.map(v => v > 0 ? Math.log(v + 1e-6) : -10)),
+        softmaxProbs: this.lastAttentionMaps[0].matrix
+      } : undefined
+    };
+
     return {
       loss: avgLoss,
-      perplexity: Math.min(10000, Math.exp(avgLoss))
+      perplexity: Math.min(10000, Math.exp(avgLoss)),
+      telemetry: this.latestTelemetry
     };
   }
 
@@ -523,6 +602,270 @@ export class MicroGPT {
     return {
       generatedTokens: tokens,
       attentionMaps: this.lastAttentionMaps
+    };
+  }
+
+  // Clone snapshot of weights for checkpoint timeline
+  cloneWeights() {
+    return {
+      wte: new Float32Array(this.wte),
+      wpe: new Float32Array(this.wpe),
+      wq: new Float32Array(this.wq),
+      wk: new Float32Array(this.wk),
+      wv: new Float32Array(this.wv),
+      wo: new Float32Array(this.wo),
+      w1: new Float32Array(this.w1),
+      b1: new Float32Array(this.b1),
+      w2: new Float32Array(this.w2),
+      b2: new Float32Array(this.b2),
+      lmHead: new Float32Array(this.lmHead)
+    };
+  }
+
+  // Restore snapshot of weights from checkpoint
+  loadWeights(snapshot: {
+    wte: Float32Array;
+    wpe: Float32Array;
+    wq: Float32Array;
+    wk: Float32Array;
+    wv: Float32Array;
+    wo: Float32Array;
+    w1: Float32Array;
+    b1: Float32Array;
+    w2: Float32Array;
+    b2: Float32Array;
+    lmHead: Float32Array;
+  }) {
+    this.wte.set(snapshot.wte);
+    this.wpe.set(snapshot.wpe);
+    this.wq.set(snapshot.wq);
+    this.wk.set(snapshot.wk);
+    this.wv.set(snapshot.wv);
+    this.wo.set(snapshot.wo);
+    this.w1.set(snapshot.w1);
+    this.b1.set(snapshot.b1);
+    this.w2.set(snapshot.w2);
+    this.b2.set(snapshot.b2);
+    this.lmHead.set(snapshot.lmHead);
+  }
+
+  // High-fidelity forward pass inspector for the Step-Through Debugger
+  stepThroughDetailed(tokens: number[]) {
+    const { blockSize, nEmbd, nHead, vocabSize } = this.config;
+    const T = Math.min(tokens.length, blockSize);
+    const headDim = Math.floor(nEmbd / nHead);
+    const scale = 1.0 / Math.sqrt(headDim);
+
+    // Stage 0: Embeddings
+    const xTokens: Float32Array[] = [];
+    const xPositions: Float32Array[] = [];
+    const xCombined: Float32Array[] = [];
+
+    for (let t = 0; t < T; t++) {
+      const tokId = Math.min(Math.max(0, tokens[t]), vocabSize - 1);
+      const tokVec = new Float32Array(nEmbd);
+      const posVec = new Float32Array(nEmbd);
+      const combVec = new Float32Array(nEmbd);
+
+      const tokOffset = tokId * nEmbd;
+      const posOffset = t * nEmbd;
+      for (let d = 0; d < nEmbd; d++) {
+        tokVec[d] = this.wte[tokOffset + d];
+        posVec[d] = this.wpe[posOffset + d];
+        combVec[d] = tokVec[d] + posVec[d];
+      }
+      xTokens.push(tokVec);
+      xPositions.push(posVec);
+      xCombined.push(combVec);
+    }
+
+    // Stage 1 & 2: Projections, Raw Attention Logits & Softmax
+    const Q: Float32Array[] = [];
+    const K: Float32Array[] = [];
+    const V: Float32Array[] = [];
+    for (let t = 0; t < T; t++) {
+      const qVec = new Float32Array(nEmbd);
+      const kVec = new Float32Array(nEmbd);
+      const vVec = new Float32Array(nEmbd);
+      for (let i = 0; i < nEmbd; i++) {
+        let sumQ = 0, sumK = 0, sumV = 0;
+        const offset = i * nEmbd;
+        for (let j = 0; j < nEmbd; j++) {
+          sumQ += xCombined[t][j] * this.wq[offset + j];
+          sumK += xCombined[t][j] * this.wk[offset + j];
+          sumV += xCombined[t][j] * this.wv[offset + j];
+        }
+        qVec[i] = sumQ;
+        kVec[i] = sumK;
+        vVec[i] = sumV;
+      }
+      Q.push(qVec);
+      K.push(kVec);
+      V.push(vVec);
+    }
+
+    const rawAttentionScores: number[][][] = []; // [head][T][T]
+    const softmaxProbabilities: number[][][] = []; // [head][T][T]
+    const weightedVPerHead: Float32Array[][] = []; // [head][T]
+    const attnOut = xCombined.map(() => new Float32Array(nEmbd));
+
+    for (let h = 0; h < nHead; h++) {
+      const headOffset = h * headDim;
+      const rawMatrix: number[][] = [];
+      const probMatrix: number[][] = [];
+      const vSumList: Float32Array[] = [];
+
+      for (let t = 0; t < T; t++) {
+        const rawRow = new Array(T).fill(0);
+        const probRow = new Array(T).fill(0);
+        const causalScores = new Float32Array(t + 1);
+
+        for (let prev = 0; prev <= t; prev++) {
+          let dot = 0;
+          for (let d = 0; d < headDim; d++) {
+            dot += Q[t][headOffset + d] * K[prev][headOffset + d];
+          }
+          const scaled = dot * scale;
+          rawRow[prev] = scaled;
+          causalScores[prev] = scaled;
+        }
+
+        const weights = softmaxInPlace(causalScores);
+        for (let prev = 0; prev <= t; prev++) {
+          probRow[prev] = weights[prev];
+        }
+        rawMatrix.push(rawRow);
+        probMatrix.push(probRow);
+
+        const vHeadSum = new Float32Array(headDim);
+        for (let d = 0; d < headDim; d++) {
+          let val = 0;
+          for (let prev = 0; prev <= t; prev++) {
+            val += weights[prev] * V[prev][headOffset + d];
+          }
+          vHeadSum[d] = val;
+          attnOut[t][headOffset + d] += val;
+        }
+        vSumList.push(vHeadSum);
+      }
+
+      rawAttentionScores.push(rawMatrix);
+      softmaxProbabilities.push(probMatrix);
+      weightedVPerHead.push(vSumList);
+    }
+
+    // Stage 3 & 4: Output Projection and Residual 1
+    const xMid: Float32Array[] = [];
+    const attnProj: Float32Array[] = [];
+    for (let t = 0; t < T; t++) {
+      const proj = new Float32Array(nEmbd);
+      for (let i = 0; i < nEmbd; i++) {
+        let s = 0;
+        const offset = i * nEmbd;
+        for (let j = 0; j < nEmbd; j++) {
+          s += attnOut[t][j] * this.wo[offset + j];
+        }
+        proj[i] = s;
+      }
+      attnProj.push(proj);
+
+      const midVec = new Float32Array(nEmbd);
+      for (let i = 0; i < nEmbd; i++) {
+        midVec[i] = xCombined[t][i] + proj[i];
+      }
+      xMid.push(midVec);
+    }
+
+    // Stage 5: MLP + Residual 2
+    const mlpHiddenDim = 4 * nEmbd;
+    const mlpPreGelu: Float32Array[] = [];
+    const mlpActivations: Float32Array[] = [];
+    const mlpOut: Float32Array[] = [];
+    const xFinal: Float32Array[] = [];
+
+    for (let t = 0; t < T; t++) {
+      const pre = new Float32Array(mlpHiddenDim);
+      const post = new Float32Array(mlpHiddenDim);
+      for (let i = 0; i < mlpHiddenDim; i++) {
+        let s = this.b1[i];
+        for (let j = 0; j < nEmbd; j++) {
+          s += xMid[t][j] * this.w1[j * mlpHiddenDim + i];
+        }
+        pre[i] = s;
+        post[i] = Math.max(0, s); // ReLU
+      }
+      mlpPreGelu.push(pre);
+      mlpActivations.push(post);
+
+      const out = new Float32Array(nEmbd);
+      for (let i = 0; i < nEmbd; i++) {
+        let s = this.b2[i];
+        for (let j = 0; j < mlpHiddenDim; j++) {
+          s += post[j] * this.w2[j * nEmbd + i];
+        }
+        out[i] = s;
+      }
+      mlpOut.push(out);
+
+      const finalVec = new Float32Array(nEmbd);
+      for (let i = 0; i < nEmbd; i++) {
+        finalVec[i] = xMid[t][i] + out[i];
+      }
+      xFinal.push(finalVec);
+    }
+
+    // Stage 6: LM Head Logits for the final token
+    const lastT = T - 1;
+    const lastLogits = new Float32Array(vocabSize);
+    for (let v = 0; v < vocabSize; v++) {
+      let s = 0;
+      for (let d = 0; d < nEmbd; d++) {
+        s += xFinal[lastT][d] * this.lmHead[d * vocabSize + v];
+      }
+      lastLogits[v] = s;
+    }
+
+    const lastProbs = softmaxInPlace(lastLogits);
+
+    // Calculate Shannon entropy: - sum(p * log2(p))
+    let entropy = 0;
+    for (let v = 0; v < vocabSize; v++) {
+      const p = lastProbs[v];
+      if (p > 1e-12) {
+        entropy -= p * Math.log2(p);
+      }
+    }
+
+    // Top 10 candidates
+    const indexed = Array.from(lastLogits).map((logit, idx) => ({
+      idx,
+      logit,
+      prob: lastProbs[idx]
+    }));
+    indexed.sort((a, b) => b.prob - a.prob);
+    const topCandidates = indexed.slice(0, 10);
+
+    return {
+      tokens,
+      xTokens,
+      xPositions,
+      xCombined,
+      Q,
+      K,
+      V,
+      rawAttentionScores,
+      softmaxProbabilities,
+      weightedVPerHead,
+      attnProj,
+      xMid,
+      mlpPreGelu,
+      mlpActivations,
+      mlpOut,
+      xFinal,
+      lastLogits,
+      lastProbs,
+      entropy,
+      topCandidates
     };
   }
 

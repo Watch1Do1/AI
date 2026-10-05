@@ -1,7 +1,41 @@
 import React from 'react';
-import { Cpu, Play, Pause, RotateCcw, Sparkles, Terminal, BookOpen, Layers, Database, Type, MessageSquare, TrendingUp } from 'lucide-react';
+import {
+  Cpu,
+  Play,
+  Pause,
+  RotateCcw,
+  Sparkles,
+  Terminal,
+  BookOpen,
+  Layers,
+  Database,
+  Type,
+  MessageSquare,
+  TrendingUp,
+  Activity,
+  Scale,
+  History,
+  Eye,
+  HelpCircle,
+  Code2
+} from 'lucide-react';
 
-export type AppTab = 'workbench' | 'bpe' | 'pytorch' | 'sft' | 'memory' | 'scaling' | 'dataset' | 'architecture';
+export type AppTab =
+  | 'workbench'
+  | 'step-debugger'
+  | 'compare-gpt2'
+  | 'gradient-viz'
+  | 'checkpoints'
+  | 'explainability'
+  | 'browser-vs-pytorch'
+  | 'why-this-works'
+  | 'bpe'
+  | 'pytorch'
+  | 'sft'
+  | 'memory'
+  | 'scaling'
+  | 'dataset'
+  | 'architecture';
 
 interface HeaderProps {
   activeTab: AppTab;
@@ -13,6 +47,8 @@ interface HeaderProps {
   currentLoss: number | null;
   step: number;
   weightSource?: 'browser' | 'pytorch';
+  onOpenWizard?: () => void;
+  onOpenTour?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -24,7 +60,9 @@ export const Header: React.FC<HeaderProps> = ({
   paramCount,
   currentLoss,
   step,
-  weightSource = 'browser'
+  weightSource = 'browser',
+  onOpenWizard,
+  onOpenTour
 }) => {
   return (
     <header className="border-b border-zinc-200 bg-white/95 backdrop-blur sticky top-0 z-30">
@@ -49,13 +87,13 @@ export const Header: React.FC<HeaderProps> = ({
                 )}
               </div>
               <p className="text-xs text-zinc-500 hidden sm:block">
-                Smallest From-Scratch Model & 4-Step Evolutionary Roadmap
+                Interactive Causal Language Model Laboratory & Mechanics Inspector
               </p>
             </div>
           </div>
 
           {/* Quick Telemetry Pills */}
-          <div className="hidden md:flex items-center gap-2 text-xs font-mono">
+          <div className="hidden lg:flex items-center gap-2 text-xs font-mono">
             <div className="px-2.5 py-1 rounded-md bg-zinc-100 text-zinc-700 border border-zinc-200/80">
               <span className="text-zinc-500">Params:</span> <span className="font-semibold text-zinc-900">{paramCount.toLocaleString()}</span>
             </div>
@@ -72,6 +110,28 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Action Buttons */}
           <div className="flex items-center gap-2">
+            {onOpenTour && (
+              <button
+                onClick={onOpenTour}
+                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-700 bg-zinc-100 hover:bg-zinc-200 transition-colors border border-zinc-200"
+                title="Open Interactive Tour & Pathways"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Tour</span>
+              </button>
+            )}
+
+            {onOpenWizard && (
+              <button
+                onClick={onOpenWizard}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold text-emerald-950 bg-emerald-400 hover:bg-emerald-300 transition-colors shadow-xs"
+                title="Launch guided 4-step training wizard"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-emerald-950" />
+                <span>Train Wizard</span>
+              </button>
+            )}
+
             <button
               id="header-toggle-training-btn"
               onClick={onToggleTraining}
@@ -84,7 +144,7 @@ export const Header: React.FC<HeaderProps> = ({
               {isTraining ? (
                 <>
                   <Pause className="w-3.5 h-3.5" />
-                  <span>Pause Training</span>
+                  <span>Pause</span>
                 </>
               ) : (
                 <>
@@ -122,6 +182,97 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
 
           <button
+            id="nav-tab-step-debugger"
+            onClick={() => setActiveTab('step-debugger')}
+            className={`flex items-center gap-1.5 px-3 py-2 font-medium border-b-2 transition-colors whitespace-nowrap ${
+              activeTab === 'step-debugger'
+                ? 'border-zinc-900 text-zinc-900 font-semibold'
+                : 'border-transparent text-zinc-500 hover:text-zinc-800 hover:border-zinc-300'
+            }`}
+          >
+            <Layers className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Step Debugger</span>
+          </button>
+
+          <button
+            id="nav-tab-compare-gpt2"
+            onClick={() => setActiveTab('compare-gpt2')}
+            className={`flex items-center gap-1.5 px-3 py-2 font-medium border-b-2 transition-colors whitespace-nowrap ${
+              activeTab === 'compare-gpt2'
+                ? 'border-zinc-900 text-zinc-900 font-semibold'
+                : 'border-transparent text-zinc-500 hover:text-zinc-800 hover:border-zinc-300'
+            }`}
+          >
+            <Scale className="w-3.5 h-3.5 text-purple-600" />
+            <span>vs. GPT-2</span>
+          </button>
+
+          <button
+            id="nav-tab-gradient-viz"
+            onClick={() => setActiveTab('gradient-viz')}
+            className={`flex items-center gap-1.5 px-3 py-2 font-medium border-b-2 transition-colors whitespace-nowrap ${
+              activeTab === 'gradient-viz'
+                ? 'border-zinc-900 text-zinc-900 font-semibold'
+                : 'border-transparent text-zinc-500 hover:text-zinc-800 hover:border-zinc-300'
+            }`}
+          >
+            <Activity className="w-3.5 h-3.5 text-rose-500" />
+            <span>Gradients & Norms</span>
+          </button>
+
+          <button
+            id="nav-tab-checkpoints"
+            onClick={() => setActiveTab('checkpoints')}
+            className={`flex items-center gap-1.5 px-3 py-2 font-medium border-b-2 transition-colors whitespace-nowrap ${
+              activeTab === 'checkpoints'
+                ? 'border-zinc-900 text-zinc-900 font-semibold'
+                : 'border-transparent text-zinc-500 hover:text-zinc-800 hover:border-zinc-300'
+            }`}
+          >
+            <History className="w-3.5 h-3.5 text-sky-600" />
+            <span>Checkpoints</span>
+          </button>
+
+          <button
+            id="nav-tab-explainability"
+            onClick={() => setActiveTab('explainability')}
+            className={`flex items-center gap-1.5 px-3 py-2 font-medium border-b-2 transition-colors whitespace-nowrap ${
+              activeTab === 'explainability'
+                ? 'border-zinc-900 text-zinc-900 font-semibold'
+                : 'border-transparent text-zinc-500 hover:text-zinc-800 hover:border-zinc-300'
+            }`}
+          >
+            <Eye className="w-3.5 h-3.5 text-indigo-500" />
+            <span>Explainability</span>
+          </button>
+
+          <button
+            id="nav-tab-browser-vs-pytorch"
+            onClick={() => setActiveTab('browser-vs-pytorch')}
+            className={`flex items-center gap-1.5 px-3 py-2 font-medium border-b-2 transition-colors whitespace-nowrap ${
+              activeTab === 'browser-vs-pytorch'
+                ? 'border-zinc-900 text-zinc-900 font-semibold'
+                : 'border-transparent text-zinc-500 hover:text-zinc-800 hover:border-zinc-300'
+            }`}
+          >
+            <Code2 className="w-3.5 h-3.5 text-teal-600" />
+            <span>Browser vs PyTorch</span>
+          </button>
+
+          <button
+            id="nav-tab-why-this-works"
+            onClick={() => setActiveTab('why-this-works')}
+            className={`flex items-center gap-1.5 px-3 py-2 font-medium border-b-2 transition-colors whitespace-nowrap ${
+              activeTab === 'why-this-works'
+                ? 'border-zinc-900 text-zinc-900 font-semibold'
+                : 'border-transparent text-zinc-500 hover:text-zinc-800 hover:border-zinc-300'
+            }`}
+          >
+            <HelpCircle className="w-3.5 h-3.5 text-amber-600" />
+            <span>Why This Works</span>
+          </button>
+
+          <button
             id="nav-tab-bpe"
             onClick={() => setActiveTab('bpe')}
             className={`flex items-center gap-1.5 px-3 py-2 font-medium border-b-2 transition-colors whitespace-nowrap ${
@@ -131,8 +282,7 @@ export const Header: React.FC<HeaderProps> = ({
             }`}
           >
             <Type className="w-3.5 h-3.5 text-emerald-600" />
-            <span>1. BPE Tokenizer</span>
-            <span className="text-[10px] px-1 py-0.2 rounded bg-emerald-50 text-emerald-700 font-medium">Subwords</span>
+            <span>BPE Tokenizer</span>
           </button>
 
           <button
@@ -145,48 +295,7 @@ export const Header: React.FC<HeaderProps> = ({
             }`}
           >
             <Terminal className="w-3.5 h-3.5 text-indigo-600" />
-            <span>2. PyTorch .pt Source</span>
-          </button>
-
-          <button
-            id="nav-tab-sft"
-            onClick={() => setActiveTab('sft')}
-            className={`flex items-center gap-1.5 px-3 py-2 font-medium border-b-2 transition-colors whitespace-nowrap ${
-              activeTab === 'sft'
-                ? 'border-zinc-900 text-zinc-900 font-semibold'
-                : 'border-transparent text-zinc-500 hover:text-zinc-800 hover:border-zinc-300'
-            }`}
-          >
-            <MessageSquare className="w-3.5 h-3.5 text-amber-600" />
-            <span>3. 1B-8B SFT Product</span>
-            <span className="text-[10px] px-1 py-0.2 rounded bg-amber-50 text-amber-700 font-medium">LoRA</span>
-          </button>
-
-          <button
-            id="nav-tab-memory"
-            onClick={() => setActiveTab('memory')}
-            className={`flex items-center gap-1.5 px-3 py-2 font-medium border-b-2 transition-colors whitespace-nowrap ${
-              activeTab === 'memory'
-                ? 'border-zinc-900 text-zinc-900 font-semibold'
-                : 'border-transparent text-zinc-500 hover:text-zinc-800 hover:border-zinc-300'
-            }`}
-          >
-            <Database className="w-3.5 h-3.5 text-indigo-500" />
-            <span>Memory Bridge</span>
-          </button>
-
-          <button
-            id="nav-tab-scaling"
-            onClick={() => setActiveTab('scaling')}
-            className={`flex items-center gap-1.5 px-3 py-2 font-medium border-b-2 transition-colors whitespace-nowrap ${
-              activeTab === 'scaling'
-                ? 'border-zinc-900 text-zinc-900 font-semibold'
-                : 'border-transparent text-zinc-500 hover:text-zinc-800 hover:border-zinc-300'
-            }`}
-          >
-            <TrendingUp className="w-3.5 h-3.5 text-sky-600" />
-            <span>4. Scaling Path</span>
-            <span className="text-[10px] px-1 py-0.2 rounded bg-sky-50 text-sky-700 font-medium">TinyStories</span>
+            <span>PyTorch Script</span>
           </button>
 
           <button
@@ -213,6 +322,45 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <Layers className="w-3.5 h-3.5" />
             <span>Architecture</span>
+          </button>
+
+          <button
+            id="nav-tab-sft"
+            onClick={() => setActiveTab('sft')}
+            className={`flex items-center gap-1.5 px-3 py-2 font-medium border-b-2 transition-colors whitespace-nowrap ${
+              activeTab === 'sft'
+                ? 'border-zinc-900 text-zinc-900 font-semibold'
+                : 'border-transparent text-zinc-500 hover:text-zinc-800 hover:border-zinc-300'
+            }`}
+          >
+            <MessageSquare className="w-3.5 h-3.5 text-amber-600" />
+            <span>SFT LoRA</span>
+          </button>
+
+          <button
+            id="nav-tab-memory"
+            onClick={() => setActiveTab('memory')}
+            className={`flex items-center gap-1.5 px-3 py-2 font-medium border-b-2 transition-colors whitespace-nowrap ${
+              activeTab === 'memory'
+                ? 'border-zinc-900 text-zinc-900 font-semibold'
+                : 'border-transparent text-zinc-500 hover:text-zinc-800 hover:border-zinc-300'
+            }`}
+          >
+            <Database className="w-3.5 h-3.5 text-indigo-500" />
+            <span>Memory Bridge</span>
+          </button>
+
+          <button
+            id="nav-tab-scaling"
+            onClick={() => setActiveTab('scaling')}
+            className={`flex items-center gap-1.5 px-3 py-2 font-medium border-b-2 transition-colors whitespace-nowrap ${
+              activeTab === 'scaling'
+                ? 'border-zinc-900 text-zinc-900 font-semibold'
+                : 'border-transparent text-zinc-500 hover:text-zinc-800 hover:border-zinc-300'
+            }`}
+          >
+            <TrendingUp className="w-3.5 h-3.5 text-sky-600" />
+            <span>Scaling Roadmap</span>
           </button>
 
         </div>

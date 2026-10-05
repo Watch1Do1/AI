@@ -17,6 +17,8 @@ interface PretrainingWorkbenchProps {
   onImportWeights?: (data: any, customTitle?: string) => { success: boolean; error?: string; activeTitle?: string; vocabSize?: number; paramCount?: number } | boolean;
   weightSource?: 'browser' | 'pytorch';
   applyConfirmation?: { activeTitle: string; vocabSize: number; paramCount: number } | null;
+  onOpenWizard?: () => void;
+  onSelectTab?: (tab: any) => void;
 }
 
 export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
@@ -32,7 +34,9 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
   initialTheoreticalLoss,
   onImportWeights,
   weightSource = 'browser',
-  applyConfirmation
+  applyConfirmation,
+  onOpenWizard,
+  onSelectTab
 }) => {
   const [prompt, setPrompt] = useState('INTERVIEWER:');
   const [temperature, setTemperature] = useState(0.7);
@@ -232,6 +236,17 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
           </div>
 
           <div className="flex flex-wrap lg:flex-nowrap items-center gap-3">
+            {onOpenWizard && (
+              <button
+                onClick={onOpenWizard}
+                className="flex items-center gap-1.5 px-4 py-3 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-zinc-950 font-bold text-sm transition-all shadow-md"
+                title="Launch guided 4-step training wizard"
+              >
+                <Sparkles className="w-4 h-4 text-zinc-950" />
+                <span>Train Wizard</span>
+              </button>
+            )}
+
             <button
               id="workbench-main-train-btn"
               onClick={onToggleTraining}
@@ -494,19 +509,39 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
 
         {/* Expandable Hyperparameters Drawer */}
         {showHyperparams && (
-          <div className="p-4 rounded-xl bg-zinc-50 border border-zinc-200 grid grid-cols-2 sm:grid-cols-5 gap-4 text-xs">
-            <div>
-              <label className="block text-zinc-600 font-medium mb-1">Learning Rate</label>
-              <select
-                value={config.lr}
-                onChange={(e) => setConfig({ ...config, lr: Number(e.target.value) })}
-                className="w-full bg-white border border-zinc-300 rounded-md px-2.5 py-1.5 text-zinc-800"
-              >
-                <option value={0.005}>0.005 (Fast)</option>
-                <option value={0.002}>0.002 (Balanced)</option>
-                <option value={0.0008}>0.0008 (Gentle)</option>
-              </select>
+          <div className="p-4 rounded-xl bg-zinc-50 border border-zinc-200 space-y-3 text-xs">
+            {/* 1-Click Architecture Presets */}
+            <div className="flex flex-wrap items-center gap-2 pb-2 border-b border-zinc-200">
+              <span className="text-zinc-500 font-semibold">1-Click Presets:</span>
+              {[
+                { name: 'NanoGPT (Karpathy)', block: 32, embd: 32, heads: 2, lr: 0.003 },
+                { name: 'GPT-2 Tiny', block: 64, embd: 48, heads: 4, lr: 0.002 },
+                { name: 'GPT-J Micro', block: 32, embd: 24, heads: 2, lr: 0.005 },
+                { name: 'TinyStories', block: 64, embd: 32, heads: 4, lr: 0.002 }
+              ].map(p => (
+                <button
+                  key={p.name}
+                  onClick={() => setConfig({ ...config, blockSize: p.block, nEmbd: p.embd, nHead: p.heads, lr: p.lr })}
+                  className="px-2.5 py-1 rounded-lg bg-white hover:bg-zinc-100 text-zinc-800 border border-zinc-300 font-mono transition-colors text-[11px]"
+                >
+                  {p.name}
+                </button>
+              ))}
             </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+              <div>
+                <label className="block text-zinc-600 font-medium mb-1">Learning Rate</label>
+                <select
+                  value={config.lr}
+                  onChange={(e) => setConfig({ ...config, lr: Number(e.target.value) })}
+                  className="w-full bg-white border border-zinc-300 rounded-md px-2.5 py-1.5 text-zinc-800"
+                >
+                  <option value={0.005}>0.005 (Fast)</option>
+                  <option value={0.002}>0.002 (Balanced)</option>
+                  <option value={0.0008}>0.0008 (Gentle)</option>
+                </select>
+              </div>
 
             <div>
               <label className="block text-zinc-600 font-medium mb-1">Context Length (Block)</label>
@@ -554,7 +589,8 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
               </div>
             </div>
           </div>
-        )}
+        </div>
+      )}
 
         {/* SVG Loss Curve Display */}
         <div className="relative w-full h-52 bg-zinc-950 rounded-xl p-3 overflow-hidden font-mono text-xs flex flex-col justify-between">
@@ -734,20 +770,30 @@ export const PretrainingWorkbench: React.FC<PretrainingWorkbenchProps> = ({
                 <Eye className="w-4 h-4 text-indigo-600" />
                 <span className="text-xs font-semibold text-zinc-900">Transformer Attention Map Inspector</span>
               </div>
-              <div className="flex items-center gap-1">
-                {attentionData.map((head, idx) => (
+              <div className="flex items-center gap-2">
+                {onSelectTab && (
                   <button
-                    key={idx}
-                    onClick={() => setActiveHead(idx)}
-                    className={`px-2.5 py-1 text-xs rounded font-mono ${
-                      activeHead === idx
-                        ? 'bg-zinc-900 text-white font-semibold'
-                        : 'bg-zinc-200 text-zinc-700 hover:bg-zinc-300'
-                    }`}
+                    onClick={() => onSelectTab('step-debugger')}
+                    className="flex items-center gap-1 px-2.5 py-1 text-xs rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 font-medium transition-colors"
                   >
-                    Head {idx}
+                    <span>Full Step Debugger →</span>
                   </button>
-                ))}
+                )}
+                <div className="flex items-center gap-1">
+                  {attentionData.map((head, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => setActiveHead(idx)}
+                      className={`px-2.5 py-1 text-xs rounded font-mono ${
+                        activeHead === idx
+                          ? 'bg-zinc-900 text-white font-semibold'
+                          : 'bg-zinc-200 text-zinc-700 hover:bg-zinc-300'
+                      }`}
+                    >
+                      Head {idx}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
